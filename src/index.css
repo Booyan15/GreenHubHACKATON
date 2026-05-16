@@ -2,6 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
+.leaflet-image-layer.satelles-field-overlay {
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
 /* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
 All colors MUST be HSL.
 */

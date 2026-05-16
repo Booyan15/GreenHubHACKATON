@@ -112,28 +112,74 @@ function evaluatePixel(sample) {
 const ndviImageEvalscript = `//VERSION=3
 function setup() {
   return {
-    input: [{ bands: ["B04", "B08", "SCL", "dataMask"] }],
+    input: [{ bands: ["B04", "B08", "dataMask"] }],
     output: { bands: 4, sampleType: "AUTO" }
   };
 }
 
-function isCloudOrShadow(scl) {
-  return scl === 3 || scl === 8 || scl === 9 || scl === 10 || scl === 11;
+function clamp(value, minVal, maxVal) {
+  return Math.max(minVal, Math.min(maxVal, value));
+}
+
+function mix(a, b, t) {
+  return a * (1 - t) + b * t;
+}
+
+function mixRgb(c1, c2, t) {
+  return [mix(c1[0], c2[0], t), mix(c1[1], c2[1], t), mix(c1[2], c2[2], t)];
+}
+
+// Standard NDVI ramp — every pixel inside the field polygon gets a color.
+function colorForNdvi(ndvi) {
+  const alpha = 0.92;
+  const v = clamp(ndvi, -0.2, 1.0);
+
+  const bareGrey = [0.72, 0.72, 0.72];
+  const red = [0.90, 0.28, 0.22];
+  const yellow = [0.98, 0.90, 0.35];
+  const orange = [0.98, 0.58, 0.12];
+  const yellowGreen = [0.72, 0.84, 0.32];
+  const green = [0.22, 0.62, 0.22];
+  const darkGreen = [0.05, 0.42, 0.12];
+
+  if (v <= 0.1) {
+    const t = (v + 0.2) / 0.3;
+    const rgb = mixRgb(bareGrey, red, clamp(t, 0, 1));
+    return [rgb[0], rgb[1], rgb[2], alpha];
+  }
+  if (v <= 0.25) {
+    const t = (v - 0.1) / 0.15;
+    const rgb = mixRgb(red, yellow, t);
+    return [rgb[0], rgb[1], rgb[2], alpha];
+  }
+  if (v <= 0.4) {
+    const t = (v - 0.25) / 0.15;
+    const rgb = mixRgb(yellow, orange, t);
+    return [rgb[0], rgb[1], rgb[2], alpha];
+  }
+  if (v <= 0.5) {
+    const t = (v - 0.4) / 0.1;
+    const rgb = mixRgb(orange, yellowGreen, t);
+    return [rgb[0], rgb[1], rgb[2], alpha];
+  }
+  if (v <= 0.7) {
+    const t = (v - 0.5) / 0.2;
+    const rgb = mixRgb(yellowGreen, green, t);
+    return [rgb[0], rgb[1], rgb[2], alpha];
+  }
+  const t = (v - 0.7) / 0.3;
+  const rgb = mixRgb(green, darkGreen, clamp(t, 0, 1));
+  return [rgb[0], rgb[1], rgb[2], alpha];
 }
 
 function evaluatePixel(sample) {
-  if (sample.dataMask === 0 || isCloudOrShadow(sample.SCL)) return [0, 0, 0, 0];
+  // Only transparent outside the drawn field polygon (geometry mask).
+  if (sample.dataMask === 0) return [0, 0, 0, 0];
   const denominator = sample.B08 + sample.B04;
   if (denominator === 0) return [0, 0, 0, 0];
 
-  // NDVI = (near infrared - red) / (near infrared + red)
   const ndvi = (sample.B08 - sample.B04) / denominator;
-
-  if (ndvi < 0.15) return [0.36, 0.12, 0.07, 0.86];
-  if (ndvi < 0.35) return [0.74, 0.18, 0.13, 0.86];
-  if (ndvi < 0.55) return [0.93, 0.72, 0.17, 0.86];
-  if (ndvi < 0.72) return [0.40, 0.74, 0.22, 0.86];
-  return [0.75, 0.93, 0.38, 0.86];
+  return colorForNdvi(ndvi);
 }`;
 
 const riskImageEvalscript = `//VERSION=3
@@ -166,32 +212,68 @@ function evaluatePixel(sample) {
 const waterImageEvalscript = `//VERSION=3
 function setup() {
   return {
-    input: [{ bands: ["B03", "B08", "SCL", "dataMask"] }],
+    input: [{ bands: ["B03", "B08", "dataMask"] }],
     output: { bands: 4, sampleType: "AUTO" }
   };
 }
 
-function isCloudOrShadow(scl) {
-  return scl === 3 || scl === 8 || scl === 9 || scl === 10 || scl === 11;
+function clamp(value, minVal, maxVal) {
+  return Math.max(minVal, Math.min(maxVal, value));
+}
+
+function mix(a, b, t) {
+  return a * (1 - t) + b * t;
+}
+
+function mixRgb(c1, c2, t) {
+  return [mix(c1[0], c2[0], t), mix(c1[1], c2[1], t), mix(c1[2], c2[2], t)];
+}
+
+// NDWI = (B03 - B08) / (B03 + B08) — blue/cyan = wet, yellow/brown = dry.
+function colorForNdwi(ndwi) {
+  const alpha = 0.9;
+  const v = clamp(ndwi, -0.25, 0.45);
+
+  const dryGrey = [0.42, 0.40, 0.36];
+  const dryBrown = [0.66, 0.53, 0.32];
+  const lightCyan = [0.37, 0.81, 0.94];
+  const optimalCyan = [0.18, 0.62, 0.88];
+  const darkBlue = [0.06, 0.28, 0.58];
+  const deepBlue = [0.02, 0.14, 0.38];
+
+  if (v <= 0.08) {
+    const t = (v + 0.25) / 0.33;
+    const rgb = mixRgb(dryGrey, dryBrown, clamp(t, 0, 1));
+    return [rgb[0], rgb[1], rgb[2], alpha];
+  }
+  if (v <= 0.2) {
+    const t = (v - 0.08) / 0.12;
+    const rgb = mixRgb(dryBrown, lightCyan, t);
+    return [rgb[0], rgb[1], rgb[2], alpha];
+  }
+  if (v <= 0.32) {
+    const t = (v - 0.2) / 0.12;
+    const rgb = mixRgb(lightCyan, optimalCyan, t);
+    return [rgb[0], rgb[1], rgb[2], alpha];
+  }
+  const t = (v - 0.32) / 0.13;
+  const rgb = mixRgb(optimalCyan, mixRgb(darkBlue, deepBlue, clamp(t, 0, 1)), clamp(t, 0, 1));
+  return [rgb[0], rgb[1], rgb[2], alpha];
 }
 
 function evaluatePixel(sample) {
-  if (sample.dataMask === 0 || isCloudOrShadow(sample.SCL)) return [0, 0, 0, 0];
+  if (sample.dataMask === 0) return [0, 0, 0, 0];
   const denominator = sample.B03 + sample.B08;
   if (denominator === 0) return [0, 0, 0, 0];
 
-  // NDWI = (green - near infrared) / (green + near infrared)
   const ndwi = (sample.B03 - sample.B08) / denominator;
-
-  if (ndwi > 0.2) return [0.05, 0.43, 0.90, 0.86];
-  if (ndwi > 0.05) return [0.35, 0.78, 1.00, 0.72];
-  return [0.16, 0.18, 0.20, 0.56];
+  return colorForNdwi(ndwi);
 }`;
 
 const ndviStatsEvalscript = `//VERSION=3
 function setup() {
   return {
-    input: [{ bands: ["B04", "B08", "SCL", "dataMask"] }],
+    input: [{ bands: ["B04", "B08", "dataMask"] }],
     output: [
       { id: "data", bands: 1, sampleType: "FLOAT32" },
       { id: "dataMask", bands: 1 }
@@ -199,15 +281,9 @@ function setup() {
   };
 }
 
-function isCloudOrShadow(scl) {
-  return scl === 3 || scl === 8 || scl === 9 || scl === 10 || scl === 11;
-}
-
 function evaluatePixel(sample) {
   const denominator = sample.B08 + sample.B04;
-  const valid = sample.dataMask === 1 && denominator !== 0 && !isCloudOrShadow(sample.SCL);
-
-  // NDVI = (near infrared - red) / (near infrared + red)
+  const valid = sample.dataMask === 1 && denominator !== 0;
   const ndvi = valid ? (sample.B08 - sample.B04) / denominator : 0;
 
   return {
@@ -219,7 +295,7 @@ function evaluatePixel(sample) {
 const waterStatsEvalscript = `//VERSION=3
 function setup() {
   return {
-    input: [{ bands: ["B03", "B08", "SCL", "dataMask"] }],
+    input: [{ bands: ["B03", "B08", "dataMask"] }],
     output: [
       { id: "data", bands: 1, sampleType: "FLOAT32" },
       { id: "dataMask", bands: 1 }
@@ -227,21 +303,17 @@ function setup() {
   };
 }
 
-function isCloudOrShadow(scl) {
-  return scl === 3 || scl === 8 || scl === 9 || scl === 10 || scl === 11;
-}
-
 function evaluatePixel(sample) {
+  if (sample.dataMask === 0) return { data: [0], dataMask: [0] };
   const denominator = sample.B03 + sample.B08;
-  const valid = sample.dataMask === 1 && denominator !== 0 && !isCloudOrShadow(sample.SCL);
+  if (denominator === 0) return { data: [0], dataMask: [0] };
 
-  // NDWI = (green - near infrared) / (green + near infrared)
-  const ndwi = valid ? (sample.B03 - sample.B08) / denominator : 0;
-  const waterMask = valid && ndwi > 0.2 ? 1 : 0;
+  const ndwi = (sample.B03 - sample.B08) / denominator;
+  const waterMask = ndwi > 0.22 ? 1 : 0;
 
   return {
     data: [waterMask],
-    dataMask: [valid ? 1 : 0]
+    dataMask: [1]
   };
 }`;
 
@@ -314,8 +386,10 @@ export async function handleSatelliteRequest(req: Request, layer: LayerType) {
     const maxCloudCoverage = normalizeCloudCoverage(payload.maxCloudCoverage);
 
     if (layer === "rgb") {
-      const chosen = await getLatestValidStats(area, timeRange, maxCloudCoverage, validDataStatsEvalscript);
-      const imageDataUrl = await requestProcessImage(area, chosen.interval, maxCloudCoverage, rgbEvalscript);
+      const [chosen, imageDataUrl] = await Promise.all([
+        getLatestValidStats(area, timeRange, maxCloudCoverage, validDataStatsEvalscript),
+        requestProcessImage(area, timeRange, maxCloudCoverage, rgbEvalscript),
+      ]);
 
       return jsonResponse({
         layer,
@@ -333,7 +407,15 @@ export async function handleSatelliteRequest(req: Request, layer: LayerType) {
 
     if (layer === "water") {
       const chosen = await getLatestValidStats(area, timeRange, maxCloudCoverage, waterStatsEvalscript);
-      const imageDataUrl = await requestProcessImage(area, chosen.interval, maxCloudCoverage, waterImageEvalscript);
+      const imageCloudCap = Math.min(100, maxCloudCoverage + 25);
+
+      let imageDataUrl: string;
+      try {
+        imageDataUrl = await requestProcessImage(area, chosen.interval, imageCloudCap, waterImageEvalscript);
+      } catch {
+        imageDataUrl = await requestProcessImage(area, timeRange, imageCloudCap, waterImageEvalscript);
+      }
+
       const waterPercentage = clamp(chosen.stats.mean * 100, 0, 100);
 
       return jsonResponse({
@@ -358,13 +440,18 @@ export async function handleSatelliteRequest(req: Request, layer: LayerType) {
       });
     }
 
+    const imageEvalscript = layer === "risk" ? riskImageEvalscript : ndviImageEvalscript;
     const chosen = await getLatestValidStats(area, timeRange, maxCloudCoverage, ndviStatsEvalscript);
-    const imageDataUrl = await requestProcessImage(
-      area,
-      chosen.interval,
-      maxCloudCoverage,
-      layer === "risk" ? riskImageEvalscript : ndviImageEvalscript,
-    );
+    const imageCloudCap = Math.min(100, maxCloudCoverage + 25);
+
+    let imageDataUrl: string;
+    try {
+      // One clear Sentinel-2 scene for the whole field (avoids patchy multi-day mosaic gaps).
+      imageDataUrl = await requestProcessImage(area, chosen.interval, imageCloudCap, imageEvalscript);
+    } catch {
+      imageDataUrl = await requestProcessImage(area, timeRange, imageCloudCap, imageEvalscript);
+    }
+
     const averageNdvi = clamp(chosen.stats.mean, -1, 1);
 
     return jsonResponse({
@@ -384,7 +471,7 @@ export async function handleSatelliteRequest(req: Request, layer: LayerType) {
         noDataCount: chosen.stats.noDataCount,
       },
       interpretation: layer === "risk" ? interpretRisk(averageNdvi) : interpretNdvi(averageNdvi),
-      warnings: buildWarnings(maxCloudCoverage),
+      warnings: buildNdviWarnings(maxCloudCoverage, chosen.stats),
     });
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;
@@ -731,7 +818,7 @@ function imageSizeForBbox([west, south, east, north]: BBox) {
   const heightMeters = Math.max(1, (north - south) * 110_540);
   const aspect = widthMeters / heightMeters;
   const max = 768;
-  const min = 256;
+  const min = 320;
 
   if (aspect >= 1) {
     return { width: max, height: Math.max(min, Math.round(max / aspect)) };
@@ -781,11 +868,26 @@ function interpretWater(percentage: number) {
 
 function buildWarnings(maxCloudCoverage: number) {
   const warnings = [
-    "Cloud masking uses Sentinel-2 scene classification. Clouds, shadows, snow, or haze can reduce accuracy.",
+    "NDVI uses one clearest Sentinel-2 scene for the whole field. Only areas outside your drawn polygon are transparent.",
   ];
 
   if (maxCloudCoverage > 50) {
     warnings.push("The selected max cloud coverage is high, so results may be less reliable.");
+  }
+
+  return warnings;
+}
+
+function buildNdviWarnings(maxCloudCoverage: number, stats: StatsValue) {
+  const warnings = buildWarnings(maxCloudCoverage);
+
+  if (stats.sampleCount > 0) {
+    const maskedRatio = stats.noDataCount / stats.sampleCount;
+    if (maskedRatio >= 0.2) {
+      warnings.push(
+        `About ${Math.round(maskedRatio * 100)}% of pixels were masked (clouds, shadows, water, or no satellite data). Those areas are transparent on the map — you see the base satellite image underneath, not bare soil.`,
+      );
+    }
   }
 
   return warnings;

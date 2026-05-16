@@ -26,6 +26,7 @@ export type SatelliteAnalysisResult = {
     noDataCount?: number;
   };
   fieldName?: string;
+  fieldId?: string;
 };
 
 export type SatelliteAnalysisRequest = {
@@ -47,40 +48,73 @@ const functionByLayer: Record<AnalysisLayer, string> = {
 
 export function defaultSatelliteDateRange() {
   const end = new Date();
-  const start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
-
+  const start = new Date(end.getTime() - 21 * 24 * 60 * 60 * 1000);
   return {
     startDate: toDateInputValue(start),
     endDate: toDateInputValue(end),
   };
 }
 
+export function canRunSatelliteAnalysis() {
+  return isSupabaseConfigured || import.meta.env.DEV;
+}
+
 export async function analyzeSatelliteArea(request: SatelliteAnalysisRequest) {
+  const body = {
+    boundary: request.boundary,
+    startDate: request.startDate,
+    endDate: request.endDate,
+    maxCloudCoverage: request.maxCloudCoverage,
+  };
+
   if (!isSupabaseConfigured) {
-    throw new Error("Supabase backend is not configured. Add the backend URL/key and Copernicus secrets before running analysis.");
+    if (!import.meta.env.DEV) {
+      throw new Error(
+        "Supabase is not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY, or run with npm run dev.",
+      );
+    }
+    return analyzeViaLocalDevApi(request.layer, body);
   }
 
-  const { data, error } = await supabase.functions.invoke(functionByLayer[request.layer], {
-    body: {
-      boundary: request.boundary,
-      startDate: request.startDate,
-      endDate: request.endDate,
-      maxCloudCoverage: request.maxCloudCoverage,
-    },
-  });
+  const { data, error } = await supabase.functions.invoke(functionByLayer[request.layer], { body });
 
   if (error) {
     const context = (error as { context?: Response }).context;
     if (context) {
-      const body = await context.clone().json().catch(() => null);
-      if (typeof body?.error === "string") throw new Error(body.error);
+      const responseBody = await context.clone().json().catch(() => null);
+      if (typeof responseBody?.error === "string") throw new Error(responseBody.error);
     }
-
     throw new Error(error.message);
   }
   if (!isSatelliteAnalysisResult(data)) {
     const message = typeof data?.error === "string" ? data.error : "Satellite analysis returned an unexpected response.";
     throw new Error(message);
+  }
+
+  return data;
+}
+
+async function analyzeViaLocalDevApi(
+  layer: AnalysisLayer,
+  body: {
+    boundary: FieldBoundary;
+    startDate: string;
+    endDate: string;
+    maxCloudCoverage: number;
+  },
+) {
+  const response = await fetch(`/api/satellite/${layer}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(typeof data?.error === "string" ? data.error : `Satellite API failed (${response.status})`);
+  }
+  if (!isSatelliteAnalysisResult(data)) {
+    throw new Error("Satellite analysis returned an unexpected response.");
   }
 
   return data;

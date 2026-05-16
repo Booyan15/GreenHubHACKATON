@@ -1,7 +1,12 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ImageOverlay, MapContainer, Marker, Polygon, Popup, Tooltip, useMap } from "react-leaflet";
+import InvalidateMapOnAnalysis from "@/components/dashboard/InvalidateMapOnAnalysis";
+import Eli5InfoTip from "@/components/dashboard/Eli5InfoTip";
+import FieldsDropdown from "@/components/dashboard/FieldsDropdown";
+import NdviMapLegend, { NDVI_ELI5 } from "@/components/dashboard/NdviMapLegend";
+import WaterMapLegend, { WATER_ELI5 } from "@/components/dashboard/WaterMapLegend";
 import "leaflet/dist/leaflet.css";
-import { AlertTriangle, Droplets, Leaf, Loader2, RefreshCw, Satellite, ShieldAlert, type LucideIcon } from "lucide-react";
+import { AlertTriangle, Droplets, Leaf, Loader2, RefreshCw, type LucideIcon } from "lucide-react";
 import FloodRiskMap from "@/components/dashboard/FloodRiskMap";
 import SatelliteTileLayer from "@/components/dashboard/SatelliteTileLayer";
 import { useAuth } from "@/contexts/AuthContext";
@@ -20,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   analyzeSatelliteArea,
+  canRunSatelliteAnalysis,
   defaultSatelliteDateRange,
   saveLatestSatelliteAnalysis,
   type AnalysisLayer,
@@ -48,30 +54,21 @@ const layerOptions: Array<{
   label: string;
   description: string;
   icon: LucideIcon;
+  eli5?: string;
 }> = [
-  {
-    id: "rgb",
-    label: "RGB View",
-    description: "True color from B04, B03, B02",
-    icon: Satellite,
-  },
   {
     id: "ndvi",
     label: "NDVI",
     description: "Vegetation health from B08 and B04",
     icon: Leaf,
+    eli5: NDVI_ELI5,
   },
   {
     id: "water",
     label: "Water Detection",
-    description: "NDWI water mask from B03 and B08",
+    description: "NDWI moisture index from B03 and B08",
     icon: Droplets,
-  },
-  {
-    id: "risk",
-    label: "Vegetation Risk",
-    description: "Stress risk derived from real NDVI",
-    icon: ShieldAlert,
+    eli5: WATER_ELI5,
   },
 ];
 
@@ -150,17 +147,32 @@ function ResizeFix() {
   return null;
 }
 
+function ZoomToField({ fieldId, boundary }: { fieldId: string | null; boundary: FieldBoundary | null }) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!fieldId || !boundary || boundary.length < 3) return;
+    map.fitBounds(boundary, { padding: [56, 56], maxZoom: 16, animate: true });
+    const t = window.setTimeout(() => map.invalidateSize(), 150);
+    return () => window.clearTimeout(t);
+  }, [fieldId, boundary, map]);
+
+  return null;
+}
+
 export default function MapPage() {
   const { user } = useAuth();
   const defaultDates = useMemo(() => defaultSatelliteDateRange(), []);
+  const analysisCache = useRef(new Map<string, SatelliteAnalysisResult>());
   const [savedFields, setSavedFields] = useState<LiveField[]>([]);
   const [selectedFieldId, setSelectedFieldId] = useState<string | null>(null);
   const [analysisLayer, setAnalysisLayer] = useState<AnalysisLayer>("ndvi");
   const [startDate, setStartDate] = useState(defaultDates.startDate);
   const [endDate, setEndDate] = useState(defaultDates.endDate);
-  const [maxCloudCoverage, setMaxCloudCoverage] = useState(35);
+  const [maxCloudCoverage, setMaxCloudCoverage] = useState(60);
   const [analysis, setAnalysis] = useState<SatelliteAnalysisResult | null>(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analyzingFieldId, setAnalyzingFieldId] = useState<string | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const isGovernment = isGovernmentWorkspace(user?.email);
   const owner = useMemo<FieldOwner>(() => {
@@ -171,7 +183,7 @@ export default function MapPage() {
     };
   }, [user?.email, user?.user_metadata?.full_name]);
 
-  useEffect(() => {
+  const reloadFields = useCallback(async () => {
     if (!user || isGovernment) return;
 
     if (!isSupabaseConfigured) {
@@ -179,15 +191,19 @@ export default function MapPage() {
       return;
     }
 
-    (async () => {
-      const { data } = await supabase
-        .from("farms")
-        .select("*")
-        .order("created_at", { ascending: false });
-
-      setSavedFields(((data ?? []) as StoredFarm[]).map((farm, index) => farmToLiveField(farm, index, owner)));
-    })();
+    const { data } = await supabase.from("farms").select("*").order("created_at", { ascending: false });
+    setSavedFields(((data ?? []) as StoredFarm[]).map((farm, index) => farmToLiveField(farm, index, owner)));
   }, [user, isGovernment, owner]);
+
+  useEffect(() => {
+    void reloadFields();
+  }, [reloadFields]);
+
+  useEffect(() => {
+    const onFocus = () => void reloadFields();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [reloadFields]);
 
   const fields = useMemo(() => (savedFields.length > 0 ? savedFields : sampleFields), [savedFields]);
   const selectedField = fields.find((field) => field.id === selectedFieldId) ?? null;
@@ -201,44 +217,70 @@ export default function MapPage() {
     }
   }, [fields, isGovernment, selectedFieldId]);
 
-  function selectField(id: string) {
-    setSelectedFieldId(id);
-    setAnalysis(null);
-    setAnalysisError(null);
-  }
+  const runAnalysis = useCallback(
+    async (field: LiveField, layer: AnalysisLayer) => {
+      if (!canRunSatelliteAnalysis()) {
+        setAnalysisError("Run npm run dev with COPERNICUS_CLIENT_ID and COPERNICUS_CLIENT_SECRET in .env.");
+        return;
+      }
+
+      const cacheKey = `v5:${field.id}:${layer}:${startDate}:${endDate}:${maxCloudCoverage}`;
+      const cached = analysisCache.current.get(cacheKey);
+      if (cached && layer !== "ndvi" && layer !== "water") {
+        setAnalysis(cached);
+        setAnalysisError(null);
+        return;
+      }
+
+      setAnalysisLoading(true);
+      setAnalyzingFieldId(field.id);
+      setAnalysisError(null);
+      setAnalysis(null);
+
+      try {
+        const result = await analyzeSatelliteArea({
+          layer,
+          boundary: field.boundary,
+          startDate,
+          endDate,
+          maxCloudCoverage,
+        });
+        const resultWithField = { ...result, fieldName: field.name, fieldId: field.id };
+        analysisCache.current.set(cacheKey, resultWithField);
+        setAnalysis(resultWithField);
+        saveLatestSatelliteAnalysis(resultWithField);
+      } catch (error) {
+        setAnalysisError(error instanceof Error ? error.message : "Satellite analysis failed.");
+      } finally {
+        setAnalysisLoading(false);
+        setAnalyzingFieldId(null);
+      }
+    },
+    [endDate, maxCloudCoverage, startDate],
+  );
+
+  const handleFieldSelect = useCallback(
+    (field: LiveField) => {
+      setSelectedFieldId(field.id);
+      setAnalysisLayer("ndvi");
+      void runAnalysis(field, "ndvi");
+    },
+    [runAnalysis],
+  );
+
+  const overlayBoundary = selectedField?.boundary ?? null;
 
   function changeLayer(layer: AnalysisLayer) {
     setAnalysisLayer(layer);
-    setAnalysis(null);
-    setAnalysisError(null);
+    if (selectedField) void runAnalysis(selectedField, layer);
   }
 
   async function analyzeSelectedArea() {
     if (!selectedField) {
-      setAnalysisError("Select a field polygon on the map before running satellite analysis.");
+      setAnalysisError("Select a field on the map first.");
       return;
     }
-
-    setAnalysisLoading(true);
-    setAnalysisError(null);
-    setAnalysis(null);
-
-    try {
-      const result = await analyzeSatelliteArea({
-        layer: analysisLayer,
-        boundary: selectedField.boundary,
-        startDate,
-        endDate,
-        maxCloudCoverage,
-      });
-      const resultWithField = { ...result, fieldName: selectedField.name };
-      setAnalysis(resultWithField);
-      saveLatestSatelliteAnalysis(resultWithField);
-    } catch (error) {
-      setAnalysisError(error instanceof Error ? error.message : "Satellite analysis failed.");
-    } finally {
-      setAnalysisLoading(false);
-    }
+    await runAnalysis(selectedField, analysisLayer);
   }
 
   if (isGovernment) {
@@ -289,38 +331,57 @@ export default function MapPage() {
       <div>
         <h1 className="text-3xl font-semibold tracking-tight">Live map</h1>
         <p className="mt-1 text-muted-foreground">
-          Draw or select field boundaries. Every analysis request uses the selected polygon only.
+          Click a field to load NDVI inside its shape. No rectangular box — only your polygon outline and colors.
         </p>
       </div>
 
       <div className="overflow-hidden rounded-3xl border border-border bg-card shadow-soft">
-        <div className="h-[560px] w-full">
+        <div className="relative h-[560px] w-full">
           <MapContainer
             center={[41.6086, 21.7453]}
             zoom={8}
             scrollWheelZoom
+            className="z-0 h-full w-full"
             style={{ height: "100%", width: "100%" }}
           >
             <ResizeFix />
+            <ZoomToField fieldId={selectedFieldId} boundary={overlayBoundary} />
+            <InvalidateMapOnAnalysis token={analysis ? `${analysis.generatedAt}-${analysis.layer}` : null} />
+            <FieldsDropdown
+              fields={fields}
+              selectedFieldId={selectedFieldId}
+              onSelect={handleFieldSelect}
+            />
             <SatelliteTileLayer />
             {analysis && selectedField && (
               <ImageOverlay
+                key={`${selectedField.id}-${analysis.generatedAt}-${analysis.layer}`}
                 url={analysis.imageDataUrl}
                 bounds={analysis.bounds}
-                opacity={analysis.layer === "rgb" ? 0.92 : 0.86}
+                opacity={0.9}
+                className="satelles-field-overlay"
                 zIndex={450}
               />
             )}
-            {fields.map((field) => (
+            {fields.map((field) => {
+              const isSelected = selectedFieldId === field.id;
+              const isLoading = analyzingFieldId === field.id;
+              return (
               <Polygon
                 key={field.id}
                 positions={field.boundary}
-                eventHandlers={{ click: () => selectField(field.id) }}
+                eventHandlers={{
+                  click: (e) => {
+                    e.originalEvent.stopPropagation();
+                    handleFieldSelect(field);
+                  },
+                }}
                 pathOptions={{
-                  color: selectedFieldId === field.id ? "#00ff88" : field.color,
+                  color: isSelected ? "#00ff88" : field.color,
                   fillColor: field.color,
-                  fillOpacity: selectedFieldId === field.id && analysis ? 0.04 : 0.18,
-                  weight: selectedFieldId === field.id ? 5 : 3,
+                  fillOpacity: isSelected ? 0 : 0.12,
+                  weight: isSelected ? 3 : 2,
+                  dashArray: isLoading ? "6 4" : undefined,
                 }}
               >
                 <Tooltip sticky direction="top" opacity={0.95}>
@@ -343,13 +404,28 @@ export default function MapPage() {
                   </div>
                 </Popup>
               </Polygon>
-            ))}
+            );
+            })}
             {fields.map((field) => (
               <Marker key={`m-${field.id}`} position={[field.lat, field.lon]} icon={placemarkIcon}>
                 <Popup>{field.name}</Popup>
               </Marker>
             ))}
           </MapContainer>
+          {analysis?.layer === "ndvi" && selectedField && analysis.imageDataUrl && !analysisLoading && (
+            <NdviMapLegend
+              fieldName={selectedField.name}
+              averageNdvi={analysis.stats?.averageNdvi}
+              acquisitionDate={analysis.acquisitionDate}
+            />
+          )}
+          {analysis?.layer === "water" && selectedField && analysis.imageDataUrl && !analysisLoading && (
+            <WaterMapLegend
+              fieldName={selectedField.name}
+              waterPercentage={analysis.stats?.waterPercentage}
+              acquisitionDate={analysis.acquisitionDate}
+            />
+          )}
         </div>
       </div>
 
@@ -369,7 +445,7 @@ export default function MapPage() {
         </div>
 
         <div className="mt-5 grid grid-cols-1 gap-3 lg:grid-cols-4">
-          {layerOptions.map(({ id, label, description, icon: Icon }) => (
+          {layerOptions.map(({ id, label, description, icon: Icon, eli5 }) => (
             <button
               key={id}
               type="button"
@@ -381,13 +457,17 @@ export default function MapPage() {
               }`}
             >
               <Icon className="mt-0.5 h-5 w-5 shrink-0" />
-              <span>
-                <span className="block text-sm font-medium">{label}</span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-1.5">
+                  <span className="text-sm font-medium">{label}</span>
+                  {eli5 && <Eli5InfoTip text={eli5} label={`Explain ${label}`} />}
+                </span>
                 <span className="mt-1 block text-xs leading-5">{description}</span>
               </span>
             </button>
           ))}
         </div>
+
 
         <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_180px_auto] md:items-end">
           <div>
@@ -449,9 +529,9 @@ export default function MapPage() {
                 ? `${formatBoundaryArea(selectedField.boundary)} · ${selectedField.boundary.length} polygon points`
                 : "Click a field boundary on the map."}
             </p>
-            {!isSupabaseConfigured && (
+            {!canRunSatelliteAnalysis() && (
               <p className="mt-3 text-sm text-destructive">
-                Supabase backend is not configured, so Copernicus analysis cannot run from this browser.
+                Copernicus needs npm run dev with credentials in .env.
               </p>
             )}
             {analysisError && (
@@ -466,9 +546,9 @@ export default function MapPage() {
             <p className="text-sm font-medium">Layer legend</p>
             <div className="mt-3 flex flex-wrap gap-2 text-xs">{renderLegend(analysisLayer)}</div>
             <p className="mt-3 text-xs text-muted-foreground">
-              {analysisLayer === "risk"
-                ? "Dark areas indicate higher vegetation stress/risk. Green/light areas indicate healthier vegetation."
-                : "Transparent pixels mean no valid satellite data after no-data and cloud masking."}
+              {analysisLayer === "water"
+                ? "Blue = high moisture / standing water · Cyan = optimal moisture · Yellow/brown = dry soil or no water."
+                : "NDVI fills the whole field shape. Grey/red = bare soil · yellow/orange = sparse · green = healthy vegetation. Only outside the polygon is transparent."}
             </p>
           </div>
         </div>
@@ -538,23 +618,17 @@ function AnalysisResultCard({
       </div>
 
       <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-3">
-        {analysis.layer === "ndvi" || analysis.layer === "risk" ? (
+        {analysis.layer === "ndvi" ? (
           <>
             <Metric label="Average NDVI" value={formatMetric(analysis.stats?.averageNdvi)} />
             <Metric label="Minimum NDVI" value={formatMetric(analysis.stats?.minNdvi)} />
             <Metric label="Maximum NDVI" value={formatMetric(analysis.stats?.maxNdvi)} />
           </>
-        ) : analysis.layer === "water" ? (
+        ) : (
           <>
             <Metric label="Detected water" value={`${formatMetric(analysis.stats?.waterPercentage)}%`} />
             <Metric label="Valid samples" value={formatCount(analysis.stats?.sampleCount)} />
             <Metric label="Masked samples" value={formatCount(analysis.stats?.noDataCount)} />
-          </>
-        ) : (
-          <>
-            <Metric label="RGB bands" value="B04 · B03 · B02" />
-            <Metric label="Cloud filter" value="SCL mask" />
-            <Metric label="Pixel source" value="Sentinel-2 L2A" />
           </>
         )}
       </div>
@@ -585,61 +659,44 @@ function Metric({ label, value }: { label: string; value: ReactNode }) {
 }
 
 function renderLegend(layer: AnalysisLayer) {
-  if (layer === "rgb") {
-    return (
-      <>
-        <LegendSwatch color="#d34b39" label="B04 red" />
-        <LegendSwatch color="#49a35b" label="B03 green" />
-        <LegendSwatch color="#3d7dd8" label="B02 blue" />
-      </>
-    );
-  }
-
   if (layer === "water") {
     return (
       <>
-        <LegendSwatch color="#0d6fe5" label="Water" />
-        <LegendSwatch color="#59c7ff" label="Possible water" />
-        <LegendSwatch color="#292e33" label="Non-water" />
-      </>
-    );
-  }
-
-  if (layer === "risk") {
-    return (
-      <>
-        <LegendSwatch color="#380d08" label="High risk" />
-        <LegendSwatch color="#b31a14" label="Stress" />
-        <LegendSwatch color="#ef9429" label="Moderate" />
-        <LegendSwatch color="#82c440" label="Healthy" />
+        <LegendSwatch color="#0c3d6e" label="High moisture / standing water" />
+        <LegendSwatch color="#5ec8e8" label="Optimal moisture" />
+        <LegendSwatch color="#a88952" label="Dry soil / no water" />
       </>
     );
   }
 
   return (
     <>
-      <LegendSwatch color="#5c1f12" label="Very low" />
-      <LegendSwatch color="#bd2e21" label="Low" />
-      <LegendSwatch color="#edb82b" label="Medium" />
-      <LegendSwatch color="#66bd38" label="Healthy" />
-      <LegendSwatch color="#bfed61" label="Very healthy" />
+      <LegendSwatch color="#b8b8b8" label="0.05–0.15 Bare / roads" />
+      <LegendSwatch color="#e64738" label="0.15–0.25 Low" />
+      <LegendSwatch color="#fae659" label="0.25–0.4 Sparse" />
+      <LegendSwatch color="#fa941f" label="0.4–0.5 Mixed" />
+      <LegendSwatch color="#389e38" label="0.5–0.7 Healthy" />
+      <LegendSwatch color="#0d6b1f" label="0.7+ Dense" />
+      <LegendSwatch color="transparent" label="Transparent = clouds / no data" />
     </>
   );
 }
 
 function LegendSwatch({ color, label }: { color: string; label: string }) {
+  const isNoData = color === "transparent";
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1">
-      <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1 text-xs">
+      <span
+        className={`h-2.5 w-2.5 shrink-0 rounded-full ${isNoData ? "border border-dashed border-muted-foreground bg-muted/40" : ""}`}
+        style={isNoData ? undefined : { backgroundColor: color }}
+      />
       {label}
     </span>
   );
 }
 
 function layerLabel(layer: AnalysisLayer) {
-  if (layer === "rgb") return "RGB View";
   if (layer === "water") return "Water Detection";
-  if (layer === "risk") return "Vegetation Risk";
   return "NDVI";
 }
 
