@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ImageOverlay, MapContainer, Marker, Polygon, Popup, Tooltip, useMap } from "react-leaflet";
 import InvalidateMapOnAnalysis from "@/components/dashboard/InvalidateMapOnAnalysis";
 import Eli5InfoTip from "@/components/dashboard/Eli5InfoTip";
@@ -6,7 +6,7 @@ import FieldsDropdown from "@/components/dashboard/FieldsDropdown";
 import NdviMapLegend, { NDVI_ELI5 } from "@/components/dashboard/NdviMapLegend";
 import WaterMapLegend, { WATER_ELI5 } from "@/components/dashboard/WaterMapLegend";
 import "leaflet/dist/leaflet.css";
-import { AlertTriangle, Droplets, Leaf, Loader2, RefreshCw, type LucideIcon } from "lucide-react";
+import { Droplets, Leaf, Loader2, type LucideIcon } from "lucide-react";
 import FloodRiskMap from "@/components/dashboard/FloodRiskMap";
 import SatelliteTileLayer from "@/components/dashboard/SatelliteTileLayer";
 import { useAuth } from "@/contexts/AuthContext";
@@ -21,8 +21,6 @@ import {
 import { isSupabaseConfigured, supabase } from "@/integrations/supabase/client";
 import { listLocalFarms, type StoredFarm } from "@/lib/local-farms";
 import { placemarkIcon } from "@/lib/map/placemark";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   analyzeSatelliteArea,
   canRunSatelliteAnalysis,
@@ -275,14 +273,6 @@ export default function MapPage() {
     if (selectedField) void runAnalysis(selectedField, layer);
   }
 
-  async function analyzeSelectedArea() {
-    if (!selectedField) {
-      setAnalysisError("Select a field on the map first.");
-      return;
-    }
-    await runAnalysis(selectedField, analysisLayer);
-  }
-
   if (isGovernment) {
     const workspace = getFloodWorkspace(user?.email);
     const urgentZones = highRiskZones(workspace.zones);
@@ -469,92 +459,14 @@ export default function MapPage() {
         </div>
 
 
-        <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_180px_auto] md:items-end">
-          <div>
-            <label htmlFor="analysis-start" className="text-xs font-medium text-muted-foreground">
-              Start date
-            </label>
-            <Input
-              id="analysis-start"
-              type="date"
-              value={startDate}
-              max={endDate}
-              onChange={(event) => setStartDate(event.target.value)}
-              className="mt-1 h-11 rounded-xl"
-            />
-          </div>
-          <div>
-            <label htmlFor="analysis-end" className="text-xs font-medium text-muted-foreground">
-              End date
-            </label>
-            <Input
-              id="analysis-end"
-              type="date"
-              value={endDate}
-              min={startDate}
-              onChange={(event) => setEndDate(event.target.value)}
-              className="mt-1 h-11 rounded-xl"
-            />
-          </div>
-          <div>
-            <label htmlFor="cloud-coverage" className="text-xs font-medium text-muted-foreground">
-              Max cloud %
-            </label>
-            <Input
-              id="cloud-coverage"
-              type="number"
-              min={0}
-              max={100}
-              value={maxCloudCoverage}
-              onChange={(event) => setMaxCloudCoverage(Number(event.target.value))}
-              className="mt-1 h-11 rounded-xl"
-            />
-          </div>
-          <Button
-            type="button"
-            onClick={analyzeSelectedArea}
-            disabled={analysisLoading || !selectedField}
-            className="h-11 rounded-xl"
-          >
-            {analysisLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-            Analyze Area
-          </Button>
-        </div>
-
-        <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-[1fr_1.2fr]">
-          <div className="rounded-xl border border-border bg-background p-4">
-            <p className="text-sm font-medium">Selected area</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {selectedField
-                ? `${formatBoundaryArea(selectedField.boundary)} · ${selectedField.boundary.length} polygon points`
-                : "Click a field boundary on the map."}
-            </p>
-            {!canRunSatelliteAnalysis() && (
-              <p className="mt-3 text-sm text-destructive">
-                Copernicus needs npm run dev with credentials in .env.
-              </p>
-            )}
-            {analysisError && (
-              <div className="mt-3 flex gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                <span>{analysisError}</span>
-              </div>
-            )}
-          </div>
-
-          <div className="rounded-xl border border-border bg-background p-4">
-            <p className="text-sm font-medium">Layer legend</p>
-            <div className="mt-3 flex flex-wrap gap-2 text-xs">{renderLegend(analysisLayer)}</div>
-            <p className="mt-3 text-xs text-muted-foreground">
-              {analysisLayer === "water"
-                ? "Blue = high moisture / standing water · Cyan = optimal moisture · Yellow/brown = dry soil or no water."
-                : "NDVI fills the whole field shape. Grey/red = bare soil · yellow/orange = sparse · green = healthy vegetation. Only outside the polygon is transparent."}
-            </p>
-          </div>
-        </div>
       </div>
 
-      <AnalysisResultCard analysis={analysis} loading={analysisLoading} layer={analysisLayer} />
+      <FieldScoreCard
+        selectedField={selectedField}
+        analysis={analysis}
+        loading={analysisLoading}
+        layer={analysisLayer}
+      />
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
         {fields.map((field) => (
@@ -573,143 +485,66 @@ export default function MapPage() {
   );
 }
 
-function AnalysisResultCard({
+function FieldScoreCard({
+  selectedField,
   analysis,
   loading,
   layer,
 }: {
+  selectedField: { name: string; boundary: FieldBoundary } | null;
   analysis: SatelliteAnalysisResult | null;
   loading: boolean;
   layer: AnalysisLayer;
 }) {
-  if (loading) {
-    return (
-      <div className="flex min-h-36 items-center justify-center rounded-2xl border border-border bg-card p-6 shadow-soft">
-        <Loader2 className="mr-2 h-5 w-5 animate-spin text-muted-foreground" />
-        <span className="text-sm text-muted-foreground">Fetching real Sentinel-2 data for the selected polygon...</span>
-      </div>
-    );
-  }
+  const areaLabel = selectedField ? formatBoundaryArea(selectedField.boundary) : null;
 
-  if (!analysis) {
-    return (
-      <div className="rounded-2xl border border-border bg-card p-6 shadow-soft">
-        <h2 className="text-lg font-semibold tracking-tight">Analysis results</h2>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Select a field, choose a layer, then run analysis. No fake NDVI, water, weather, or risk values are shown here.
-        </p>
-      </div>
-    );
-  }
+  const scoreLabel = layer === "water" ? "High-moisture area" : "Average NDVI";
+  const scoreValue = loading
+    ? "…"
+    : layer === "water"
+      ? analysis?.stats?.waterPercentage !== undefined
+        ? `${analysis.stats.waterPercentage.toFixed(1)}%`
+        : "--"
+      : analysis?.stats?.averageNdvi !== undefined
+        ? analysis.stats.averageNdvi.toFixed(2)
+        : "--";
 
   return (
-    <div className="rounded-2xl border border-border bg-card p-6 shadow-soft">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold tracking-tight">{layerLabel(analysis.layer)} results</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {analysis.fieldName ? `${analysis.fieldName} · ` : ""}
-            Acquisition: {formatDateTime(analysis.acquisitionDate)}
-          </p>
-        </div>
-        <span className="rounded-full bg-accent px-3 py-1 text-xs font-medium text-accent-foreground">
-          Real Copernicus data
-        </span>
-      </div>
-
-      <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-3">
-        {analysis.layer === "ndvi" ? (
+    <div className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-6 shadow-soft sm:flex-row sm:items-center sm:justify-between">
+      {/* Field identity */}
+      <div className="min-w-0">
+        {selectedField ? (
           <>
-            <Metric label="Average NDVI" value={formatMetric(analysis.stats?.averageNdvi)} />
-            <Metric label="Minimum NDVI" value={formatMetric(analysis.stats?.minNdvi)} />
-            <Metric label="Maximum NDVI" value={formatMetric(analysis.stats?.maxNdvi)} />
+            <h2 className="truncate text-3xl font-bold tracking-tight">{selectedField.name}</h2>
+            <p className="mt-1 text-base font-medium text-muted-foreground">{areaLabel}</p>
           </>
         ) : (
           <>
-            <Metric label="Detected water" value={`${formatMetric(analysis.stats?.waterPercentage)}%`} />
-            <Metric label="Valid samples" value={formatCount(analysis.stats?.sampleCount)} />
-            <Metric label="Masked samples" value={formatCount(analysis.stats?.noDataCount)} />
+            <h2 className="text-3xl font-bold tracking-tight text-muted-foreground">No field selected</h2>
+            <p className="mt-1 text-base text-muted-foreground">Click a field polygon on the map</p>
           </>
         )}
       </div>
 
-      <p className="mt-5 text-sm leading-6 text-muted-foreground">{analysis.interpretation}</p>
-      <p className="mt-3 text-xs text-muted-foreground">Source: {analysis.source}</p>
-      {analysis.warnings && analysis.warnings.length > 0 && (
-        <div className="mt-4 space-y-2">
-          {analysis.warnings.map((warning) => (
-            <div key={warning} className="flex gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-muted-foreground">
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
-              <span>{warning}</span>
-            </div>
-          ))}
-        </div>
-      )}
+      {/* Score */}
+      <div className="flex shrink-0 flex-col items-start rounded-2xl border border-border bg-background px-8 py-5 sm:items-center">
+        <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+          {scoreLabel}
+        </p>
+        {loading ? (
+          <div className="mt-2 flex items-center gap-2">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            <span className="text-2xl font-bold text-muted-foreground">…</span>
+          </div>
+        ) : (
+          <p className="mt-1 text-5xl font-bold tabular-nums tracking-tight">{scoreValue}</p>
+        )}
+        <p className="mt-1.5 text-[11px] text-muted-foreground">Sentinel-2 · Copernicus</p>
+      </div>
     </div>
   );
-}
-
-function Metric({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div className="rounded-xl border border-border bg-background p-4">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-1 text-2xl font-semibold tracking-tight">{value}</p>
-    </div>
-  );
-}
-
-function renderLegend(layer: AnalysisLayer) {
-  if (layer === "water") {
-    return (
-      <>
-        <LegendSwatch color="#0c3d6e" label="High moisture / standing water" />
-        <LegendSwatch color="#5ec8e8" label="Optimal moisture" />
-        <LegendSwatch color="#a88952" label="Dry soil / no water" />
-      </>
-    );
-  }
-
-  return (
-    <>
-      <LegendSwatch color="#b8b8b8" label="0.05–0.15 Bare / roads" />
-      <LegendSwatch color="#e64738" label="0.15–0.25 Low" />
-      <LegendSwatch color="#fae659" label="0.25–0.4 Sparse" />
-      <LegendSwatch color="#fa941f" label="0.4–0.5 Mixed" />
-      <LegendSwatch color="#389e38" label="0.5–0.7 Healthy" />
-      <LegendSwatch color="#0d6b1f" label="0.7+ Dense" />
-      <LegendSwatch color="transparent" label="Transparent = clouds / no data" />
-    </>
-  );
-}
-
-function LegendSwatch({ color, label }: { color: string; label: string }) {
-  const isNoData = color === "transparent";
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1 text-xs">
-      <span
-        className={`h-2.5 w-2.5 shrink-0 rounded-full ${isNoData ? "border border-dashed border-muted-foreground bg-muted/40" : ""}`}
-        style={isNoData ? undefined : { backgroundColor: color }}
-      />
-      {label}
-    </span>
-  );
-}
-
-function layerLabel(layer: AnalysisLayer) {
-  if (layer === "water") return "Water Detection";
-  return "NDVI";
 }
 
 function formatMetric(value: number | undefined) {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(2) : "--";
-}
-
-function formatCount(value: number | undefined) {
-  return typeof value === "number" && Number.isFinite(value) ? value.toLocaleString() : "--";
-}
-
-function formatDateTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
