@@ -1,0 +1,7 @@
+project_id = "klgfmwnhypodmnleyqkj"
+
+[functions.seed-demo-accounts]
+verify_jwt = false
+
+[functions.weather]
+verify_jwt = false

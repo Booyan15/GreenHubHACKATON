@@ -1,0 +1,144 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+All colors MUST be HSL.
+*/
+
+@layer base {
+  :root {
+    /* SATELLES — Apple-style light design system */
+    --background: 240 20% 97%;          /* #f2f2f7 */
+    --foreground: 0 0% 7%;              /* #111 */
+
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 7%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 7%;
+
+    --primary: 211 100% 50%;            /* #007aff Apple blue */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 240 14% 94%;
+    --secondary-foreground: 0 0% 7%;
+
+    --muted: 240 14% 94%;
+    --muted-foreground: 240 6% 45%;
+
+    --accent: 211 100% 95%;
+    --accent-foreground: 211 100% 35%;
+
+    --destructive: 4 100% 59%;          /* #ff3b30 */
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 142 71% 49%;             /* #34c759 */
+    --success-foreground: 0 0% 100%;
+
+    --warning: 35 100% 50%;             /* #ff9500 */
+    --warning-foreground: 0 0% 100%;
+
+    --border: 240 10% 90%;
+    --input: 240 10% 90%;
+    --ring: 211 100% 50%;
+
+    --radius: 1rem;
+
+    /* Premium gradients & shadows */
+    --gradient-hero: radial-gradient(ellipse 80% 60% at 50% 0%, hsl(211 100% 50% / 0.10), transparent 60%), linear-gradient(180deg, #ffffff 0%, hsl(240 20% 97%) 100%);
+    --gradient-primary: linear-gradient(135deg, hsl(211 100% 55%), hsl(199 100% 50%));
+    --gradient-mesh: radial-gradient(at 20% 20%, hsl(211 100% 95%) 0px, transparent 50%), radial-gradient(at 80% 0%, hsl(199 100% 92%) 0px, transparent 50%), radial-gradient(at 0% 80%, hsl(142 71% 92%) 0px, transparent 50%);
+
+    --shadow-sm: 0 1px 2px hsl(220 30% 10% / 0.04), 0 1px 3px hsl(220 30% 10% / 0.04);
+    --shadow-md: 0 4px 16px hsl(220 30% 10% / 0.06), 0 2px 4px hsl(220 30% 10% / 0.04);
+    --shadow-lg: 0 24px 64px -12px hsl(220 30% 10% / 0.12), 0 8px 24px hsl(220 30% 10% / 0.06);
+    --shadow-glow: 0 0 80px hsl(211 100% 50% / 0.25);
+
+    --sidebar-background: 0 0% 98%;
+
+    --sidebar-foreground: 240 5.3% 26.1%;
+
+    --sidebar-primary: 240 5.9% 10%;
+
+    --sidebar-primary-foreground: 0 0% 98%;
+
+    --sidebar-accent: 240 4.8% 95.9%;
+
+    --sidebar-accent-foreground: 240 5.9% 10%;
+
+    --sidebar-border: 220 13% 91%;
+
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 210 40% 98%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 212.7 26.8% 83.9%;
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "ss01", "cv11";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    background: var(--gradient-primary);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .glass {
+    background: hsl(0 0% 100% / 0.72);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+  }
+  .shadow-elegant { box-shadow: var(--shadow-lg); }
+  .shadow-soft { box-shadow: var(--shadow-md); }
+  .shadow-glow { box-shadow: var(--shadow-glow); }
+  .bg-hero { background: var(--gradient-hero); }
+  .bg-mesh { background: var(--gradient-mesh); }
+}
