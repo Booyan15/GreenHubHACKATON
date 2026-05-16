@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { FloodWorkspace } from "@/lib/government/flood";
 
 type FloodWeather = {
-  rain24hMm: number;
-  rain72hMm: number;
-  source: "open-meteo" | "demo";
+  rain24hMm: number | null;
+  rain72hMm: number | null;
+  source: "open-meteo" | "unavailable";
   updatedAt: string;
 };
 
@@ -17,16 +17,12 @@ type OpenMeteoResponse = {
 };
 
 export function useFloodWeather(workspace: FloodWorkspace) {
-  const fallback = useMemo<FloodWeather>(
-    () => ({
-      rain24hMm: workspace.expectedRain24hMm,
-      rain72hMm: workspace.expectedRain72hMm,
-      source: "demo",
-      updatedAt: "Demo scenario",
-    }),
-    [workspace.expectedRain24hMm, workspace.expectedRain72hMm],
-  );
-  const [weather, setWeather] = useState<FloodWeather>(fallback);
+  const [weather, setWeather] = useState<FloodWeather>({
+    rain24hMm: null,
+    rain72hMm: null,
+    source: "unavailable",
+    updatedAt: "Weather API is not configured yet.",
+  });
 
   useEffect(() => {
     const controller = new AbortController();
@@ -37,7 +33,12 @@ export function useFloodWeather(workspace: FloodWorkspace) {
     url.searchParams.set("forecast_days", "3");
     url.searchParams.set("timezone", "auto");
 
-    setWeather(fallback);
+    setWeather({
+      rain24hMm: null,
+      rain72hMm: null,
+      source: "unavailable",
+      updatedAt: "Loading Open-Meteo forecast...",
+    });
 
     fetch(url, { signal: controller.signal })
       .then((response) => {
@@ -47,7 +48,7 @@ export function useFloodWeather(workspace: FloodWorkspace) {
       .then((data) => {
         const values = data.hourly?.rain ?? data.hourly?.precipitation ?? [];
         const sum = (items: number[]) => items.reduce((total, value) => total + (Number(value) || 0), 0);
-        if (values.length < 24) return;
+        if (values.length < 24) throw new Error("Open-Meteo response was incomplete");
 
         setWeather({
           rain24hMm: Math.round(sum(values.slice(0, 24))),
@@ -57,11 +58,18 @@ export function useFloodWeather(workspace: FloodWorkspace) {
         });
       })
       .catch((error) => {
-        if ((error as Error).name !== "AbortError") setWeather(fallback);
+        if ((error as Error).name !== "AbortError") {
+          setWeather({
+            rain24hMm: null,
+            rain72hMm: null,
+            source: "unavailable",
+            updatedAt: "Weather API is not configured yet.",
+          });
+        }
       });
 
     return () => controller.abort();
-  }, [fallback, workspace.center]);
+  }, [workspace.center]);
 
   return weather;
 }

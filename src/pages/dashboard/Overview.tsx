@@ -1,9 +1,5 @@
 import { useMemo, useState } from "react";
 import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
   CartesianGrid,
   Line,
   LineChart,
@@ -12,10 +8,10 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { Activity, CloudRain, Droplets, Leaf, RadioTower, ShieldAlert, Users, Waves } from "lucide-react";
+import { CloudRain, Droplets, Leaf, RadioTower, Satellite, ShieldAlert, Users, Waves } from "lucide-react";
+import { Link } from "react-router-dom";
 import StatCard from "@/components/dashboard/StatCard";
 import { useAuth } from "@/contexts/AuthContext";
-import { alertsFor, farmHealth, riskBg } from "@/lib/mock/data";
 import FloodRiskMap from "@/components/dashboard/FloodRiskMap";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -28,34 +24,37 @@ import {
   type FloodZone,
 } from "@/lib/government/flood";
 import { useFloodWeather } from "@/hooks/use-flood-weather";
+import { readLatestSatelliteAnalysis } from "@/lib/satellite-analysis";
 
 export default function Overview() {
   const { user } = useAuth();
   return isGovernmentWorkspace(user?.email) ? (
     <GovernmentOverview email={user?.email} />
   ) : (
-    <AgronomyOverview seed={user?.id ?? "demo"} />
+    <AgronomyOverview />
   );
 }
 
-function AgronomyOverview({ seed }: { seed: string }) {
-  const { ndvi, soil, risk, series } = useMemo(() => farmHealth(seed), [seed]);
-  const alerts = useMemo(() => alertsFor(seed), [seed]);
+function AgronomyOverview() {
+  const latestAnalysis = useMemo(() => readLatestSatelliteAnalysis(), []);
+  const ndvi = latestAnalysis?.stats?.averageNdvi;
+  const water = latestAnalysis?.stats?.waterPercentage;
+  const hasRealAnalysis = Boolean(latestAnalysis);
 
   return (
     <div className="mx-auto max-w-7xl space-y-8">
       <div>
         <h1 className="text-3xl font-semibold tracking-tight">Overview</h1>
         <p className="mt-1 text-muted-foreground">
-          Real-time intelligence across your monitored zones.
+          Real satellite intelligence appears here after you analyze a selected field on the Live map.
         </p>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           label="NDVI vegetation"
-          value={ndvi.toFixed(2)}
-          hint="Sentinel-2 · 7-day avg"
+          value={typeof ndvi === "number" ? ndvi.toFixed(2) : "No data"}
+          hint={typeof ndvi === "number" ? "Latest selected field" : "Run NDVI on Live map"}
           icon={<Leaf className="h-4 w-4 text-success" />}
           info={
             <>
@@ -69,120 +68,94 @@ function AgronomyOverview({ seed }: { seed: string }) {
           }
         />
         <StatCard
-          label="Soil moisture"
-          value={`${soil.toFixed(0)}%`}
-          hint="Volumetric · root zone"
+          label="Detected water"
+          value={typeof water === "number" ? `${water.toFixed(1)}%` : "No data"}
+          hint={typeof water === "number" ? "NDWI mask" : "Run Water Detection"}
           icon={<Droplets className="h-4 w-4 text-primary" />}
           info={
             <p>
-              Soil moisture estimates how much water is available around the crop roots. Low values can mean irrigation is needed; very high values can mean waterlogging or disease pressure.
+              Water detection uses NDWI from Sentinel-2 green and near-infrared bands. Blue pixels can indicate surface water, wet soil, or irrigation water.
             </p>
           }
         />
         <StatCard
-          label="Active risk"
-          value={<span className="capitalize">{risk}</span>}
-          hint="Composite index"
+          label="Vegetation risk"
+          value={latestAnalysis?.layer === "risk" || typeof ndvi === "number" ? riskFromNdvi(ndvi) : "No data"}
+          hint="Derived only from real NDVI"
           icon={<ShieldAlert className="h-4 w-4 text-warning" />}
           info={
             <p>
-              Active risk combines vegetation health, recent rainfall, soil moisture, and weather signals into one warning level for the monitored fields.
+              Vegetation risk is derived from NDVI. Very low NDVI means poor vegetation or stress; higher NDVI usually means healthier crop growth.
             </p>
           }
         />
         <StatCard
-          label="Open alerts"
-          value={alerts.length}
-          hint="Across all zones"
-          icon={<Activity className="h-4 w-4 text-destructive" />}
+          label="Data status"
+          value={hasRealAnalysis ? "Real" : "Waiting"}
+          hint={hasRealAnalysis ? latestAnalysis?.source : "No fake values shown"}
+          icon={<Satellite className="h-4 w-4 text-primary" />}
           info={
             <p>
-              Open alerts are current items that may need attention, such as crop stress, unusual moisture, heavy rain, heat, or other changes detected in your fields.
+              This dashboard does not show generated environmental numbers. Select a polygon on the map and run an analysis to populate these cards with Copernicus data.
             </p>
           }
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2 rounded-2xl border border-border bg-card p-6 shadow-soft">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-lg font-semibold tracking-tight">Vegetation health (NDVI)</h2>
-              <p className="text-sm text-muted-foreground">Last 30 days · all zones</p>
-            </div>
-          </div>
-          <div className="mt-6 h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={series}>
-                <defs>
-                  <linearGradient id="ndviFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="hsl(var(--success))" stopOpacity={0.35} />
-                    <stop offset="100%" stopColor="hsl(var(--success))" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                <XAxis dataKey="date" stroke="hsl(var(--muted-foreground))" fontSize={12} />
-                <YAxis domain={[0, 1]} stroke="hsl(var(--muted-foreground))" fontSize={12} />
-                <Tooltip
-                  contentStyle={{
-                    background: "hsl(var(--card))",
-                    border: "1px solid hsl(var(--border))",
-                    borderRadius: 12,
-                  }}
-                />
-                <Area type="monotone" dataKey="ndvi" stroke="hsl(var(--success))" fill="url(#ndviFill)" strokeWidth={2} />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-border bg-card p-6 shadow-soft">
-          <h2 className="text-lg font-semibold tracking-tight">Rainfall (mm)</h2>
-          <p className="text-sm text-muted-foreground">Last 30 days</p>
-          <div className="mt-6 h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={series}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                <XAxis dataKey="date" stroke="hsl(var(--muted-foreground))" fontSize={12} />
-                <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} />
-                <Tooltip
-                  contentStyle={{
-                    background: "hsl(var(--card))",
-                    border: "1px solid hsl(var(--border))",
-                    borderRadius: 12,
-                  }}
-                />
-                <Bar dataKey="rain" fill="hsl(var(--primary))" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      </div>
-
       <div className="rounded-2xl border border-border bg-card p-6 shadow-soft">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold tracking-tight">Smart advisory feed</h2>
-          <span className="text-xs text-muted-foreground">Generated by SATELLES Agronomy AI</span>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold tracking-tight">Latest satellite analysis</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {latestAnalysis
+                ? `${latestAnalysis.fieldName ?? "Selected field"} · Acquisition ${formatDate(latestAnalysis.acquisitionDate)}`
+                : "No selected-area Copernicus analysis has been run in this browser yet."}
+            </p>
+          </div>
+          <Button asChild className="rounded-full">
+            <Link to="/dashboard/map">Open Live map</Link>
+          </Button>
         </div>
-        <ul className="mt-4 divide-y divide-border">
-          {alerts.map((a) => (
-            <li key={a.id} className="flex items-start gap-4 py-4">
-              <span className={`mt-0.5 inline-flex shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-wider ${riskBg[a.level]}`}>
-                {a.level}
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="font-medium">{a.title}</p>
-                  <span className="text-xs text-muted-foreground">{a.time}</span>
-                </div>
-                <p className="mt-1 text-sm text-muted-foreground">{a.body}</p>
-              </div>
-            </li>
-          ))}
-        </ul>
+
+        {latestAnalysis ? (
+          <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-3">
+            <MiniStat label="Layer" value={layerName(latestAnalysis.layer)} />
+            <MiniStat label="Average NDVI" value={typeof ndvi === "number" ? ndvi.toFixed(2) : "Not calculated"} />
+            <MiniStat label="Water detected" value={typeof water === "number" ? `${water.toFixed(1)}%` : "Not calculated"} />
+          </div>
+        ) : (
+          <div className="mt-5 rounded-xl border border-dashed border-border bg-background p-5 text-sm text-muted-foreground">
+            The previous mock NDVI, rainfall, soil moisture, and generated alerts have been removed. This page waits for real selected-area results from the Live map.
+          </div>
+        )}
       </div>
     </div>
   );
+}
+
+function riskFromNdvi(ndvi: number | undefined) {
+  if (typeof ndvi !== "number") return "No data";
+  if (ndvi < 0.15) return "High";
+  if (ndvi < 0.35) return "Elevated";
+  if (ndvi < 0.55) return "Moderate";
+  return "Low";
+}
+
+function layerName(layer: string) {
+  if (layer === "rgb") return "RGB View";
+  if (layer === "water") return "Water Detection";
+  if (layer === "risk") return "Vegetation Risk";
+  return "NDVI";
+}
+
+function formatDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+function formatMm(value: number | null) {
+  return typeof value === "number" ? `${value} mm` : "No data";
 }
 
 function GovernmentOverview({ email }: { email?: string | null }) {
@@ -192,8 +165,8 @@ function GovernmentOverview({ email }: { email?: string | null }) {
   const selectedZone = workspace.zones.find((zone) => zone.id === selectedZoneId) ?? workspace.zones[0];
   const exposed = peopleTotal(workspace.zones);
   const urgentZones = highRiskZones(workspace.zones);
-  const rain24h = weather.rain24hMm || workspace.expectedRain24hMm;
-  const rain72h = weather.rain72hMm || workspace.expectedRain72hMm;
+  const rain24h = weather.rain24hMm;
+  const rain72h = weather.rain72hMm;
 
   function selectZone(zone: FloodZone) {
     setSelectedZoneId(zone.id);
@@ -211,7 +184,7 @@ function GovernmentOverview({ email }: { email?: string | null }) {
         <div className="rounded-2xl border border-border bg-card px-4 py-3 text-sm shadow-soft">
           <p className="font-medium">Source fusion</p>
           <p className="text-xs text-muted-foreground">
-            Sentinel-1 · Sentinel-2 · CEMS · {weather.source === "open-meteo" ? "Open-Meteo live" : "demo rain fallback"}
+            Sentinel-1 · Sentinel-2 · CEMS · {weather.source === "open-meteo" ? "Open-Meteo live" : "Weather API unavailable"}
           </p>
         </div>
       </div>
@@ -219,8 +192,8 @@ function GovernmentOverview({ email }: { email?: string | null }) {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           label="Expected rain"
-          value={`${rain24h} mm`}
-          hint={`72h total ${rain72h} mm`}
+          value={formatMm(rain24h)}
+          hint={rain72h == null ? "Weather API is not configured yet." : `72h total ${rain72h} mm`}
           icon={<CloudRain className="h-4 w-4 text-primary" />}
         />
         <StatCard

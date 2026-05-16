@@ -1,22 +1,23 @@
-import { useMemo } from "react";
 import { FileText, Download } from "lucide-react";
+import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
-import { farmHealth, alertsFor } from "@/lib/mock/data";
 import { getFloodWorkspace, highRiskZones, isGovernmentWorkspace, peopleTotal, riskBadgeClass } from "@/lib/government/flood";
+import { readLatestSatelliteAnalysis } from "@/lib/satellite-analysis";
 
 export default function Report() {
   const { user } = useAuth();
   return isGovernmentWorkspace(user?.email) ? (
     <GovernmentReport email={user?.email} />
   ) : (
-    <AgronomyReport seed={user?.id ?? "demo"} />
+    <AgronomyReport />
   );
 }
 
-function AgronomyReport({ seed }: { seed: string }) {
-  const { ndvi, soil, risk } = useMemo(() => farmHealth(seed), [seed]);
-  const alerts = useMemo(() => alertsFor(seed), [seed]);
+function AgronomyReport() {
+  const latestAnalysis = readLatestSatelliteAnalysis();
+  const ndvi = latestAnalysis?.stats?.averageNdvi;
+  const water = latestAnalysis?.stats?.waterPercentage;
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
@@ -27,7 +28,7 @@ function AgronomyReport({ seed }: { seed: string }) {
           </span>
           <div>
             <h1 className="text-3xl font-semibold tracking-tight">Executive report</h1>
-            <p className="text-muted-foreground">Crisis & operations summary · {new Date().toLocaleDateString()}</p>
+            <p className="text-muted-foreground">Selected-area satellite summary · {new Date().toLocaleDateString()}</p>
           </div>
         </div>
         <Button className="rounded-full" onClick={() => window.print()}>
@@ -37,37 +38,55 @@ function AgronomyReport({ seed }: { seed: string }) {
 
       <div className="rounded-3xl border border-border bg-card p-8 shadow-elegant print:shadow-none">
         <h2 className="text-2xl font-semibold tracking-tight">Situation overview</h2>
-        <p className="mt-3 text-muted-foreground leading-relaxed">
-          Across monitored zones in North Macedonia, satellite signals report a composite{" "}
-          <span className="font-semibold text-foreground capitalize">{risk}</span> risk. Mean NDVI is{" "}
-          <span className="font-semibold text-foreground">{ndvi.toFixed(2)}</span>, with average root-zone
-          soil moisture at <span className="font-semibold text-foreground">{soil.toFixed(0)}%</span>.
-          Climate forecasts indicate continued exposure for the next 14 days.
-        </p>
+        {latestAnalysis ? (
+          <>
+            <p className="mt-3 leading-relaxed text-muted-foreground">
+              The latest report is based on <span className="font-semibold text-foreground">{layerName(latestAnalysis.layer)}</span>{" "}
+              for <span className="font-semibold text-foreground">{latestAnalysis.fieldName ?? "the selected field"}</span>.
+              Acquisition date: <span className="font-semibold text-foreground">{formatDate(latestAnalysis.acquisitionDate)}</span>.
+            </p>
+            <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <ReportStat label="Average NDVI" value={typeof ndvi === "number" ? ndvi.toFixed(2) : "Not calculated"} />
+              <ReportStat label="Water detected" value={typeof water === "number" ? `${water.toFixed(1)}%` : "Not calculated"} />
+              <ReportStat label="Source" value="Sentinel-2 L2A" />
+            </div>
 
-        <h3 className="mt-8 text-lg font-semibold tracking-tight">Recommended actions</h3>
-        <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm text-muted-foreground">
-          <li>Activate water reserves in the Strumica plain within 48 hours.</li>
-          <li>Notify Tikveš and Pelagonija cooperatives of frost-risk advisory.</li>
-          <li>Pre-position EVN crews near critical wildfire-adjacent grid sections.</li>
-          <li>Coordinate Crisis Management Center on aerial smoke plume monitoring.</li>
-        </ol>
+            <h3 className="mt-8 text-lg font-semibold tracking-tight">Interpretation</h3>
+            <p className="mt-3 leading-relaxed text-muted-foreground">{latestAnalysis.interpretation}</p>
 
-        <h3 className="mt-8 text-lg font-semibold tracking-tight">Active incidents ({alerts.length})</h3>
-        <ul className="mt-3 space-y-2 text-sm">
-          {alerts.map((a) => (
-            <li key={a.id} className="rounded-xl border border-border p-3">
-              <div className="flex items-center justify-between">
-                <span className="font-medium">{a.title}</span>
-                <span className="text-xs uppercase tracking-wider text-muted-foreground">{a.level}</span>
-              </div>
-              <p className="mt-1 text-muted-foreground">{a.body}</p>
-            </li>
-          ))}
-        </ul>
+            <h3 className="mt-8 text-lg font-semibold tracking-tight">Data quality notes</h3>
+            <ul className="mt-3 space-y-2 text-sm text-muted-foreground">
+              {(latestAnalysis.warnings ?? ["Clouds, shadows, snow, haze, or no-data pixels may affect optical satellite analysis."]).map((warning) => (
+                <li key={warning} className="rounded-xl border border-border p-3">{warning}</li>
+              ))}
+            </ul>
+          </>
+        ) : (
+          <div className="mt-4 rounded-xl border border-dashed border-border bg-background p-5">
+            <p className="text-muted-foreground">
+              No report is generated because no real Copernicus analysis has been run yet. The previous hardcoded report values and recommendations have been removed.
+            </p>
+            <Button asChild className="mt-5 rounded-full">
+              <Link to="/dashboard/map">Open Live map</Link>
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );
+}
+
+function layerName(layer: string) {
+  if (layer === "rgb") return "RGB View";
+  if (layer === "water") return "Water Detection";
+  if (layer === "risk") return "Vegetation Risk";
+  return "NDVI";
+}
+
+function formatDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
 function GovernmentReport({ email }: { email?: string | null }) {

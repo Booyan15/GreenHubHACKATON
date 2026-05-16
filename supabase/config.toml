@@ -5,3 +5,21 @@ verify_jwt = false
 
 [functions.weather]
 verify_jwt = false
+
+[functions.copernicus-ndvi]
+verify_jwt = false
+
+[functions.copernicus-token]
+verify_jwt = false
+
+[functions.satellite-rgb]
+verify_jwt = false
+
+[functions.satellite-ndvi]
+verify_jwt = false
+
+[functions.satellite-water]
+verify_jwt = false
+
+[functions.satellite-risk]
+verify_jwt = false

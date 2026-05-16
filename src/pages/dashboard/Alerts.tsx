@@ -1,20 +1,31 @@
 import { useMemo } from "react";
-import { BellRing, CloudRain, Users, Waves } from "lucide-react";
+import { BellRing, CloudRain, Leaf, Users, Waves } from "lucide-react";
+import { Link } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { alertsFor, riskBg } from "@/lib/mock/data";
+import { Button } from "@/components/ui/button";
 import { getFloodWorkspace, isGovernmentWorkspace, riskBadgeClass } from "@/lib/government/flood";
+import { readLatestSatelliteAnalysis } from "@/lib/satellite-analysis";
 
 export default function Alerts() {
   const { user } = useAuth();
   return isGovernmentWorkspace(user?.email) ? (
     <GovernmentAlerts email={user?.email} />
   ) : (
-    <AgronomyAlerts seed={user?.id ?? "demo"} />
+    <AgronomyAlerts />
   );
 }
 
-function AgronomyAlerts({ seed }: { seed: string }) {
-  const alerts = useMemo(() => alertsFor(seed), [seed]);
+function AgronomyAlerts() {
+  const latestAnalysis = useMemo(() => readLatestSatelliteAnalysis(), []);
+  const ndvi = latestAnalysis?.stats?.averageNdvi;
+  const alert =
+    typeof ndvi === "number" && ndvi < 0.35
+      ? {
+          level: ndvi < 0.15 ? "high" : "medium",
+          title: "Vegetation stress detected",
+          body: `Average NDVI for ${latestAnalysis?.fieldName ?? "the selected field"} is ${ndvi.toFixed(2)} from ${formatDate(latestAnalysis?.acquisitionDate ?? "")}. Inspect the darker/red areas in the Live map before taking action.`,
+        }
+      : null;
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
@@ -24,30 +35,46 @@ function AgronomyAlerts({ seed }: { seed: string }) {
         </span>
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Alerts</h1>
-          <p className="text-muted-foreground">Real-time risk notifications across your zones.</p>
+          <p className="text-muted-foreground">Only real selected-area satellite alerts are shown.</p>
         </div>
       </div>
 
       <div className="space-y-3">
-        {alerts.map((a) => (
-          <div key={a.id} className="rounded-2xl border border-border bg-card p-5 shadow-soft">
+        {alert ? (
+          <div className="rounded-2xl border border-border bg-card p-5 shadow-soft">
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-wider ${riskBg[a.level]}`}>
-                    {a.level}
+                  <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-wider ${riskBadgeClass(alert.level)}`}>
+                    {alert.level}
                   </span>
-                  <p className="font-medium">{a.title}</p>
+                  <p className="font-medium">{alert.title}</p>
                 </div>
-                <p className="mt-2 text-sm text-muted-foreground">{a.body}</p>
+                <p className="mt-2 text-sm text-muted-foreground">{alert.body}</p>
               </div>
-              <span className="shrink-0 text-xs text-muted-foreground">{a.time}</span>
+              <Leaf className="h-4 w-4 shrink-0 text-warning" />
             </div>
           </div>
-        ))}
+        ) : (
+          <div className="rounded-2xl border border-border bg-card p-6 shadow-soft">
+            <p className="text-lg font-semibold tracking-tight">No real satellite alerts</p>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              The mock alert feed has been removed. Run NDVI or Vegetation Risk analysis on a selected field to create alerts from real Copernicus data.
+            </p>
+            <Button asChild className="mt-5 rounded-full">
+              <Link to="/dashboard/map">Open Live map</Link>
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );
+}
+
+function formatDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
 function GovernmentAlerts({ email }: { email?: string | null }) {

@@ -84,35 +84,6 @@ async function fetchOpenMeteoWeather(lat: number, lon: number, signal: AbortSign
   return data;
 }
 
-function fallbackWeather(city: (typeof cities)[number]): WeatherResponse {
-  const citySeed = city.name.length + Math.round(city.lat + city.lon);
-  const baseTemp = 19 + (citySeed % 6);
-  const today = new Date();
-  const time = Array.from({ length: 14 }, (_, index) => {
-    const date = new Date(today);
-    date.setDate(today.getDate() + index);
-    return date.toISOString().slice(0, 10);
-  });
-
-  return {
-    current: {
-      temperature_2m: baseTemp,
-      relative_humidity_2m: 58 + (citySeed % 18),
-      precipitation: citySeed % 3 === 0 ? 0.8 : 0,
-      wind_speed_10m: 8 + (citySeed % 9),
-      apparent_temperature: baseTemp + 1,
-    },
-    daily: {
-      time,
-      temperature_2m_max: time.map((_, index) => baseTemp + 4 + Math.round(Math.sin(index / 2) * 3)),
-      temperature_2m_min: time.map((_, index) => baseTemp - 5 + Math.round(Math.cos(index / 3) * 2)),
-      precipitation_sum: time.map((_, index) => Math.max(0, Math.round((Math.sin(index + citySeed) + 1) * 4) / 2)),
-      wind_speed_10m_max: time.map((_, index) => 14 + ((index + citySeed) % 8)),
-      uv_index_max: time.map((_, index) => 4 + ((index + citySeed) % 4)),
-    },
-  };
-}
-
 export default function Weather() {
   const { user } = useAuth();
   if (isGovernmentWorkspace(user?.email)) return <GovernmentHydrologyWeather email={user?.email} />;
@@ -125,12 +96,13 @@ function AgronomyWeather() {
   const [city, setCity] = useState(cities[0]);
   const [data, setData] = useState<WeatherResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [source, setSource] = useState<"open-meteo" | "demo">("open-meteo");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
     setLoading(true);
+    setErrorMessage(null);
     (async () => {
       try {
         if (isSupabaseConfigured) {
@@ -144,7 +116,6 @@ function AgronomyWeather() {
           if (!error && isWeatherResponse(functionData)) {
             if (!cancelled) {
               setData(functionData);
-              setSource("open-meteo");
             }
             return;
           }
@@ -153,16 +124,15 @@ function AgronomyWeather() {
         const liveWeather = await fetchOpenMeteoWeather(city.lat, city.lon, controller.signal);
         if (!cancelled) {
           setData(liveWeather);
-          setSource("open-meteo");
         }
       } catch (error) {
         if ((error as Error).name === "AbortError" || cancelled) return;
 
-        setData(fallbackWeather(city));
-        setSource("demo");
+        setData(null);
+        setErrorMessage("Weather data could not be loaded from Open-Meteo. No fake forecast is shown.");
         toast({
-          title: "Using demo forecast",
-          description: "Live weather could not be reached, so SATELLES is showing a local fallback.",
+          title: "Weather unavailable",
+          description: "Live weather could not be reached. No demo weather values are shown.",
         });
       } finally {
         if (!cancelled) setLoading(false);
@@ -190,7 +160,7 @@ function AgronomyWeather() {
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Weather & forecast</h1>
           <p className="mt-1 text-muted-foreground">
-            {source === "open-meteo" ? "Live data from Open-Meteo" : "Demo fallback forecast"} · 14-day outlook for {city.name}.
+            Live data from Open-Meteo · 14-day outlook for {city.name}.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -210,9 +180,16 @@ function AgronomyWeather() {
         </div>
       </div>
 
-      {loading || !data ? (
+      {loading ? (
         <div className="flex h-64 items-center justify-center rounded-2xl border border-border bg-card">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+      ) : errorMessage || !data ? (
+        <div className="rounded-2xl border border-border bg-card p-6 shadow-soft">
+          <h2 className="text-lg font-semibold tracking-tight">Weather API is not configured yet.</h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {errorMessage ?? "No real weather response is available. No fake temperature, rain, humidity, or wind values are shown."}
+          </p>
         </div>
       ) : (
         <>
@@ -274,21 +251,21 @@ function GovernmentHydrologyWeather({ email }: { email?: string | null }) {
       <div>
         <h1 className="text-3xl font-semibold tracking-tight">Rain and river levels</h1>
         <p className="mt-1 text-muted-foreground">
-          {workspace.city} · {workspace.nearestWaterway} · {weather.source === "open-meteo" ? "Open-Meteo live precipitation" : "Demo scenario"}
+          {workspace.city} · {workspace.nearestWaterway} · {weather.source === "open-meteo" ? "Open-Meteo live precipitation" : "Weather API is not configured yet."}
         </p>
       </div>
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard
           label="Rain next 24h"
-          value={`${weather.rain24hMm || workspace.expectedRain24hMm} mm`}
-          hint="City forecast"
+          value={formatMm(weather.rain24hMm)}
+          hint="Open-Meteo city forecast"
           icon={<CloudRain className="h-4 w-4 text-primary" />}
         />
         <StatCard
           label="Rain next 72h"
-          value={`${weather.rain72hMm || workspace.expectedRain72hMm} mm`}
-          hint="Accumulated"
+          value={formatMm(weather.rain72hMm)}
+          hint="Open-Meteo accumulated"
           icon={<Droplets className="h-4 w-4 text-primary" />}
         />
         <StatCard
@@ -307,7 +284,9 @@ function GovernmentHydrologyWeather({ email }: { email?: string | null }) {
 
       <div className="rounded-2xl border border-border bg-card p-6 shadow-soft">
         <h2 className="text-lg font-semibold tracking-tight">72-hour hydrology outlook</h2>
-        <p className="mt-1 text-sm text-muted-foreground">Rain accumulation and {workspace.waterMetricLabel.toLowerCase()} projection.</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Configured hydrology scenario, separate from live Open-Meteo weather values.
+        </p>
         <div className="mt-6 h-80">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={workspace.rainfallSeries}>
@@ -339,10 +318,14 @@ function GovernmentHydrologyWeather({ email }: { email?: string | null }) {
                 style={{ width: `${Math.min(zone.probability, 100)}%` }}
               />
             </div>
-            <p className="mt-2 text-xs text-muted-foreground">{zone.probability}% flood probability · {zone.floodDepthM.toFixed(2)} m expected depth</p>
+            <p className="mt-2 text-xs text-muted-foreground">{zone.probability}% configured scenario probability · {zone.floodDepthM.toFixed(2)} m expected depth</p>
           </div>
         ))}
       </div>
     </div>
   );
+}
+
+function formatMm(value: number | null) {
+  return typeof value === "number" ? `${value} mm` : "No data";
 }

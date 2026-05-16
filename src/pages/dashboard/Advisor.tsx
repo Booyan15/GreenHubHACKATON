@@ -1,7 +1,8 @@
 import { useMemo } from "react";
-import { Brain, Droplets, Megaphone, RadioTower, Route, ShieldCheck, TrendingUp, Waves } from "lucide-react";
+import { Brain, Droplets, Megaphone, RadioTower, Route, Satellite, ShieldCheck, TrendingUp, Waves, type LucideIcon } from "lucide-react";
+import { Link } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { farmHealth } from "@/lib/mock/data";
+import { Button } from "@/components/ui/button";
 import {
   getFloodWorkspace,
   highRiskZones,
@@ -9,39 +10,19 @@ import {
   peopleTotal,
   riskBadgeClass,
 } from "@/lib/government/flood";
+import { readLatestSatelliteAnalysis } from "@/lib/satellite-analysis";
 
 export default function Advisor() {
   const { user } = useAuth();
   return isGovernmentWorkspace(user?.email) ? (
     <GovernmentFloodAdvisor email={user?.email} />
   ) : (
-    <AgronomyAdvisor seed={user?.id ?? "demo"} />
+    <AgronomyAdvisor />
   );
 }
 
-function AgronomyAdvisor({ seed }: { seed: string }) {
-  const { ndvi, soil, risk } = useMemo(() => farmHealth(seed), [seed]);
-
-  const recs = [
-    {
-      icon: Droplets,
-      title: "Irrigation plan — next 7 days",
-      body: `Soil at ${soil.toFixed(0)}% moisture. Schedule 18mm across 3 cycles, focus rows 4–9.`,
-      roi: "+€420 saved on water",
-    },
-    {
-      icon: ShieldCheck,
-      title: "Disease prevention",
-      body: "High humidity window in 48h — apply preventive fungicide on most-vulnerable parcels.",
-      roi: "Avoids ~12% yield loss",
-    },
-    {
-      icon: TrendingUp,
-      title: "Harvest timing",
-      body: `NDVI trending ${ndvi > 0.6 ? "stable" : "downward"}. Optimal harvest window in 9–14 days.`,
-      roi: "+€1,150 quality premium",
-    },
-  ];
+function AgronomyAdvisor() {
+  const latestAnalysis = useMemo(() => readLatestSatelliteAnalysis(), []);
 
   return (
     <div className="mx-auto max-w-5xl space-y-8">
@@ -52,42 +33,96 @@ function AgronomyAdvisor({ seed }: { seed: string }) {
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Agronomy AI Advisor</h1>
           <p className="text-muted-foreground">
-            Personalized recommendations from satellite + weather + your farm history.
+            Recommendations appear only after a real selected-area satellite analysis is available.
           </p>
         </div>
       </div>
 
-      <div className="rounded-2xl border border-border bg-card p-6 shadow-soft">
-        <div className="flex items-center justify-between">
+      {!latestAnalysis ? (
+        <div className="rounded-2xl border border-border bg-card p-6 shadow-soft">
           <div>
-            <p className="text-sm text-muted-foreground">Composite risk score</p>
-            <p className="mt-1 text-4xl font-semibold tracking-tight capitalize">{risk}</p>
+            <p className="text-sm text-muted-foreground">No real analysis loaded</p>
+            <p className="mt-2 text-2xl font-semibold tracking-tight">Run Copernicus analysis first</p>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+              The previous generated irrigation, disease, harvest, and ROI recommendations have been removed. Select a field on the Live map and analyze NDVI, water, or vegetation risk to create advice from real data.
+            </p>
           </div>
-          <div className="text-right">
-            <p className="text-sm text-muted-foreground">Projected ROI uplift</p>
-            <p className="mt-1 text-4xl font-semibold tracking-tight text-success">+€1,570</p>
-          </div>
+          <Button asChild className="mt-5 rounded-full">
+            <Link to="/dashboard/map">Open Live map</Link>
+          </Button>
         </div>
-      </div>
-
-      <div className="space-y-4">
-        {recs.map((r) => (
-          <div key={r.title} className="flex items-start gap-4 rounded-2xl border border-border bg-card p-5 shadow-soft">
-            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-accent text-accent-foreground">
-              <r.icon className="h-5 w-5" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="font-medium">{r.title}</p>
-                <span className="rounded-full bg-success/10 px-2.5 py-1 text-xs font-medium text-success">{r.roi}</span>
+      ) : (
+        <>
+          <div className="rounded-2xl border border-border bg-card p-6 shadow-soft">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p className="text-sm text-muted-foreground">{latestAnalysis.fieldName ?? "Selected field"}</p>
+                <p className="mt-1 text-3xl font-semibold tracking-tight">{layerName(latestAnalysis.layer)}</p>
               </div>
-              <p className="mt-1 text-sm text-muted-foreground">{r.body}</p>
+              <div className="text-right text-sm text-muted-foreground">
+                <p>{formatDate(latestAnalysis.acquisitionDate)}</p>
+                <p>{latestAnalysis.source}</p>
+              </div>
             </div>
           </div>
-        ))}
+
+          <div className="space-y-4">
+            <RealAdviceCard
+              icon={Satellite}
+              title="Satellite interpretation"
+              body={latestAnalysis.interpretation}
+            />
+            {typeof latestAnalysis.stats?.averageNdvi === "number" && (
+              <RealAdviceCard
+                icon={TrendingUp}
+                title="NDVI-based field check"
+                body={`Average NDVI is ${latestAnalysis.stats.averageNdvi.toFixed(2)}. Use this value to prioritize field scouting where the map shows darker or red/brown stress colors.`}
+              />
+            )}
+            {typeof latestAnalysis.stats?.waterPercentage === "number" && (
+              <RealAdviceCard
+                icon={Droplets}
+                title="Water detection field check"
+                body={`${latestAnalysis.stats.waterPercentage.toFixed(1)}% of valid selected-area pixels were classified as water by NDWI. Inspect blue areas before treating them as standing water.`}
+              />
+            )}
+            <RealAdviceCard
+              icon={ShieldCheck}
+              title="Accuracy note"
+              body="Clouds, shadows, snow, haze, and recent field operations can affect optical Sentinel-2 results. Use the acquisition date and map colors before making operational decisions."
+            />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function RealAdviceCard({ icon: Icon, title, body }: { icon: LucideIcon; title: string; body: string }) {
+  return (
+    <div className="flex items-start gap-4 rounded-2xl border border-border bg-card p-5 shadow-soft">
+      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-accent text-accent-foreground">
+        <Icon className="h-5 w-5" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="font-medium">{title}</p>
+        <p className="mt-1 text-sm leading-6 text-muted-foreground">{body}</p>
       </div>
     </div>
   );
+}
+
+function layerName(layer: string) {
+  if (layer === "rgb") return "RGB View";
+  if (layer === "water") return "Water Detection";
+  if (layer === "risk") return "Vegetation Risk";
+  return "NDVI";
+}
+
+function formatDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
 function GovernmentFloodAdvisor({ email }: { email?: string | null }) {
