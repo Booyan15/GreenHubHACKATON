@@ -1,12 +1,14 @@
 import { Suspense, lazy } from "react";
 import { motion } from "framer-motion";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { ArrowRight, PlayCircle, MapPin } from "lucide-react";
+import { ArrowRight, MapPin } from "lucide-react";
 import type { SavedLocation } from "./LocationChooser";
 
 const Globe = lazy(() => import("./Globe"));
 
 export default function Hero({ selectedLocation }: { selectedLocation: SavedLocation }) {
+  const navigate = useNavigate();
   return (
     <section className="relative isolate overflow-hidden bg-hero pt-24">
       {/* Subtle mesh accents */}
@@ -56,24 +58,12 @@ export default function Hero({ selectedLocation }: { selectedLocation: SavedLoca
             transition={{ duration: 0.7, delay: 0.25 }}
             className="mt-10 flex flex-wrap items-center gap-3"
           >
-            <Button size="lg" className="h-12 rounded-full px-6 text-base shadow-glow">
+            <Button
+              size="lg"
+              className="h-12 rounded-full px-6 text-base shadow-glow"
+              onClick={() => navigate("/dashboard/map")}
+            >
               Start free
-              <ArrowRight className="ml-1 h-4 w-4" />
-            </Button>
-            <Button
-              size="lg"
-              variant="outline"
-              className="h-12 rounded-full border-border bg-card px-6 text-base"
-            >
-              <PlayCircle className="mr-1.5 h-4 w-4" />
-              Book a demo
-            </Button>
-            <Button
-              size="lg"
-              variant="ghost"
-              className="h-12 rounded-full px-4 text-base text-foreground"
-            >
-              Explore live risks
               <ArrowRight className="ml-1 h-4 w-4" />
             </Button>
           </motion.div>

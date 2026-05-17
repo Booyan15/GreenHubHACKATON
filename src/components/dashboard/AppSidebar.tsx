@@ -1,13 +1,8 @@
 import {
-  LayoutDashboard,
   Map,
   Sprout,
   Waves,
-  CloudSun,
-  Brain,
   BellRing,
-  Bell,
-  FileText,
   CreditCard,
   Settings,
 } from "lucide-react";
@@ -33,16 +28,11 @@ export function AppSidebar() {
   const collapsed = state === "collapsed";
   const isGovernment = isGovernmentWorkspace(user?.email);
   const main = [
-    { title: "Overview", url: "/dashboard", icon: LayoutDashboard, end: true },
     { title: isGovernment ? "Flood map" : "Live map", url: "/dashboard/map", icon: Map },
     { title: isGovernment ? "Flood zones" : "Farms & zones", url: "/dashboard/farms", icon: isGovernment ? Waves : Sprout },
-    { title: "Weather", url: "/dashboard/weather", icon: CloudSun },
-    { title: isGovernment ? "Flood Advisor" : "AI Advisor", url: "/dashboard/advisor", icon: Brain },
     { title: "Alerts", url: "/dashboard/alerts", icon: BellRing },
   ];
   const account = [
-    { title: "Reports", url: "/dashboard/report", icon: FileText },
-    { title: isGovernment ? "Announcements" : "Notifications", url: "/dashboard/notifications", icon: Bell },
     { title: "Billing", url: "/dashboard/billing", icon: CreditCard },
     { title: "Settings", url: "/dashboard/settings", icon: Settings },
   ];

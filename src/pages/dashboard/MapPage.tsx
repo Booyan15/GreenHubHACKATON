@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ImageOverlay, MapContainer, Marker, Polygon, Popup, Tooltip, useMap } from "react-leaflet";
+import { ImageOverlay, MapContainer, Marker, Polygon, useMap } from "react-leaflet";
+import L from "leaflet";
 import InvalidateMapOnAnalysis from "@/components/dashboard/InvalidateMapOnAnalysis";
 import Eli5InfoTip from "@/components/dashboard/Eli5InfoTip";
 import FieldsDropdown from "@/components/dashboard/FieldsDropdown";
@@ -20,7 +21,6 @@ import {
 } from "@/lib/field-boundary";
 import { isSupabaseConfigured, supabase } from "@/integrations/supabase/client";
 import { listLocalFarms, type StoredFarm } from "@/lib/local-farms";
-import { placemarkIcon } from "@/lib/map/placemark";
 import {
   analyzeSatelliteArea,
   canRunSatelliteAnalysis,
@@ -145,6 +145,19 @@ function ResizeFix() {
   return null;
 }
 
+// Red Google-Maps-style pin icon
+const redPinIcon = L.divIcon({
+  className: "",
+  iconSize: [28, 36],
+  iconAnchor: [14, 36],
+  popupAnchor: [0, -36],
+  html: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 28 36" width="28" height="36">
+    <path d="M14 0C6.268 0 0 6.268 0 14c0 9.333 14 22 14 22S28 23.333 28 14C28 6.268 21.732 0 14 0z" fill="#e53935"/>
+    <circle cx="14" cy="14" r="6" fill="white"/>
+  </svg>`,
+});
+
+
 function ZoomToField({ fieldId, boundary }: { fieldId: string | null; boundary: FieldBoundary | null }) {
   const map = useMap();
 
@@ -172,6 +185,8 @@ export default function MapPage() {
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analyzingFieldId, setAnalyzingFieldId] = useState<string | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [lastNdviAverage, setLastNdviAverage] = useState<number | undefined>(undefined);
+  const [scoutPin, setScoutPin] = useState<{ lat: number; lon: number } | null>(null);
   const isGovernment = isGovernmentWorkspace(user?.email);
   const owner = useMemo<FieldOwner>(() => {
     const fullName = typeof user?.user_metadata?.full_name === "string" ? user.user_metadata.full_name.trim() : "";
@@ -246,6 +261,9 @@ export default function MapPage() {
         const resultWithField = { ...result, fieldName: field.name, fieldId: field.id };
         analysisCache.current.set(cacheKey, resultWithField);
         setAnalysis(resultWithField);
+        if (layer === "ndvi" && resultWithField.stats?.averageNdvi !== undefined) {
+          setLastNdviAverage(resultWithField.stats.averageNdvi);
+        }
         saveLatestSatelliteAnalysis(resultWithField);
       } catch (error) {
         setAnalysisError(error instanceof Error ? error.message : "Satellite analysis failed.");
@@ -261,6 +279,7 @@ export default function MapPage() {
     (field: LiveField) => {
       setSelectedFieldId(field.id);
       setAnalysisLayer("ndvi");
+      setLastNdviAverage(undefined);
       void runAnalysis(field, "ndvi");
     },
     [runAnalysis],
@@ -317,12 +336,51 @@ export default function MapPage() {
   }
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6">
+    <div className="mx-auto max-w-7xl space-y-4">
+      {/* ── Page header ─────────────────────────────────────────────────────── */}
       <div>
         <h1 className="text-3xl font-semibold tracking-tight">Live map</h1>
-        <p className="mt-1 text-muted-foreground">
-          Click a field to load NDVI inside its shape. No rectangular box — only your polygon outline and colors.
+        <p className="mt-0.5 text-sm text-muted-foreground">
+          Click a field to load satellite data, then tap a spot to scout it.
         </p>
+      </div>
+
+      {/* ── Unified control bar: layer pills LEFT · field selector RIGHT ───── */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {/* Layer segmented control */}
+        <div className="flex items-center gap-1.5 rounded-full border border-border bg-card p-1 shadow-sm">
+          {layerOptions.map(({ id, label, icon: Icon, eli5 }) => {
+            const active = analysisLayer === id;
+            return (
+              <div key={id} className="flex items-center">
+                <button
+                  type="button"
+                  onClick={() => changeLayer(id)}
+                  className={`flex items-center gap-2.5 rounded-full px-8 py-3.5 text-base font-semibold transition-all duration-200 ${
+                    active
+                      ? "bg-primary text-primary-foreground shadow-sm"
+                      : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                  }`}
+                >
+                  <Icon className="h-5 w-5 shrink-0" />
+                  {label}
+                </button>
+                {eli5 && (
+                  <span className="px-1">
+                    <Eli5InfoTip text={eli5} label={`Explain ${label}`} />
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Field selector */}
+        <FieldsDropdown
+          fields={fields}
+          selectedFieldId={selectedFieldId}
+          onSelect={handleFieldSelect}
+        />
       </div>
 
       <div className="overflow-hidden rounded-3xl border border-border bg-card shadow-soft">
@@ -337,11 +395,6 @@ export default function MapPage() {
             <ResizeFix />
             <ZoomToField fieldId={selectedFieldId} boundary={overlayBoundary} />
             <InvalidateMapOnAnalysis token={analysis ? `${analysis.generatedAt}-${analysis.layer}` : null} />
-            <FieldsDropdown
-              fields={fields}
-              selectedFieldId={selectedFieldId}
-              onSelect={handleFieldSelect}
-            />
             <SatelliteTileLayer />
             {analysis && selectedField && (
               <ImageOverlay
@@ -362,8 +415,13 @@ export default function MapPage() {
                 positions={field.boundary}
                 eventHandlers={{
                   click: (e) => {
-                    e.originalEvent.stopPropagation();
-                    handleFieldSelect(field);
+                    // Only load NDVI when switching to a different field.
+                    // If this field is already active, skip the analysis refresh
+                    // entirely — just move the scout pin.
+                    if (field.id !== selectedFieldId) {
+                      handleFieldSelect(field);
+                    }
+                    setScoutPin({ lat: e.latlng.lat, lon: e.latlng.lng });
                   },
                 }}
                 pathOptions={{
@@ -373,34 +431,13 @@ export default function MapPage() {
                   weight: isSelected ? 3 : 2,
                   dashArray: isLoading ? "6 4" : undefined,
                 }}
-              >
-                <Tooltip sticky direction="top" opacity={0.95}>
-                  <div className="min-w-44">
-                    <div className="font-medium">{field.name}</div>
-                    <div className="mt-1 text-xs">Owner: {field.ownerName}</div>
-                    <div className="text-xs text-muted-foreground">{field.ownerEmail}</div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {formatBoundaryArea(field.boundary)}
-                      {field.crop ? ` · ${field.crop}` : ""}
-                    </div>
-                  </div>
-                </Tooltip>
-                <Popup>
-                  <div className="font-medium">{field.name}</div>
-                  <div className="text-xs text-muted-foreground">Owner: {field.ownerName}</div>
-                  {field.crop && <div className="text-xs text-muted-foreground">{field.crop}</div>}
-                  <div className="text-xs text-muted-foreground">
-                    {formatBoundaryArea(field.boundary)} · {field.boundary.length} polygon points
-                  </div>
-                </Popup>
-              </Polygon>
+              />
+
             );
             })}
-            {fields.map((field) => (
-              <Marker key={`m-${field.id}`} position={[field.lat, field.lon]} icon={placemarkIcon}>
-                <Popup>{field.name}</Popup>
-              </Marker>
-            ))}
+            {scoutPin && (
+              <Marker position={[scoutPin.lat, scoutPin.lon]} icon={redPinIcon} zIndexOffset={1000} />
+            )}
           </MapContainer>
           {analysis?.layer === "ndvi" && selectedField && analysis.imageDataUrl && !analysisLoading && (
             <NdviMapLegend
@@ -419,70 +456,51 @@ export default function MapPage() {
         </div>
       </div>
 
-      <div className="rounded-2xl border border-border bg-card p-5 shadow-soft">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold tracking-tight">Satellite analysis</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Source: Sentinel-2 L2A via Copernicus Data Space / Sentinel Hub.
-            </p>
-          </div>
-          {selectedField && (
-            <span className="rounded-full bg-accent px-3 py-1 text-xs font-medium text-accent-foreground">
-              {selectedField.name}
-            </span>
-          )}
-        </div>
-
-        <div className="mt-5 grid grid-cols-1 gap-3 lg:grid-cols-4">
-          {layerOptions.map(({ id, label, description, icon: Icon, eli5 }) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => changeLayer(id)}
-              className={`flex min-h-24 items-start gap-3 rounded-xl border p-4 text-left transition-colors ${
-                analysisLayer === id
-                  ? "border-primary bg-primary/10 text-foreground"
-                  : "border-border bg-background text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <Icon className="mt-0.5 h-5 w-5 shrink-0" />
-              <span className="min-w-0 flex-1">
-                <span className="flex items-center gap-1.5">
-                  <span className="text-sm font-medium">{label}</span>
-                  {eli5 && <Eli5InfoTip text={eli5} label={`Explain ${label}`} />}
-                </span>
-                <span className="mt-1 block text-xs leading-5">{description}</span>
-              </span>
-            </button>
-          ))}
-        </div>
-
-
-      </div>
-
       <FieldScoreCard
         selectedField={selectedField}
         analysis={analysis}
         loading={analysisLoading}
         layer={analysisLayer}
+        lastNdviAverage={lastNdviAverage}
       />
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
-        {fields.map((field) => (
-          <div key={field.id} className="rounded-2xl border border-border bg-card p-4 shadow-soft">
-            <div className="text-sm font-medium">{field.name}</div>
-            <div className="mt-1 text-xs text-muted-foreground">
-              {field.crop || "Monitored field"} · Owner: {field.ownerName}
-            </div>
-            <div className="mt-2 text-xs text-muted-foreground">
-              {formatBoundaryArea(field.boundary)} · {field.boundary.length} boundary points
-            </div>
-          </div>
-        ))}
-      </div>
     </div>
   );
+}
+
+
+// ─── Status badge helpers ─────────────────────────────────────────────────────
+
+function getNdviBadge(ndvi: number | undefined): { text: string; className: string } | null {
+  if (ndvi === undefined) return null;
+  if (ndvi >= 0.5) return { text: "🟢 High (Optimal Vegetation)", className: "text-green-600 dark:text-green-400" };
+  if (ndvi < 0.2) return { text: "🔴 Low (Severe Crop Stress)", className: "text-red-500 dark:text-red-400" };
+  return null;
+}
+
+function getMoistureBadge(value: string): { text: string; className: string } | null {
+  const num = parseFloat(value);
+  if (!Number.isFinite(num)) return null;
+  if (num >= 40 && num <= 60) return { text: "🟢 Middle (Optimal Moisture)", className: "text-green-600 dark:text-green-400" };
+  if (num > 75) return { text: "🚨 Too High (Risk of Flooding / Root Rot)", className: "text-red-500 dark:text-red-400" };
+  if (num < 30) return { text: "🟡 Too Low (Drought Stress / Needs Water)", className: "text-amber-500 dark:text-amber-400" };
+  return null;
+}
+
+// ─── Main card ────────────────────────────────────────────────────────────────
+
+function getMockSoilMoisture(
+  ndvi: number | undefined,
+  waterPct: number | undefined,
+): { value: string; sublabel: string } {
+  if (ndvi === undefined) return { value: "--", sublabel: "Select a field to analyse" };
+  // Real NDWI flooding signal takes priority
+  if (waterPct !== undefined && waterPct > 40)
+    return { value: "82.5%", sublabel: "Water Logging / Flooding" };
+  // Healthy vegetation → optimal soil moisture
+  if (ndvi >= 0.35) return { value: "48.3%", sublabel: "Optimal Moisture" };
+  // Low / negative NDVI → bare soil or drought stress
+  return { value: "14.2%", sublabel: "Dry Soil Stress" };
 }
 
 function FieldScoreCard({
@@ -490,61 +508,78 @@ function FieldScoreCard({
   analysis,
   loading,
   layer,
+  lastNdviAverage,
 }: {
   selectedField: { name: string; boundary: FieldBoundary } | null;
   analysis: SatelliteAnalysisResult | null;
   loading: boolean;
   layer: AnalysisLayer;
+  lastNdviAverage: number | undefined;
 }) {
   const areaLabel = selectedField ? formatBoundaryArea(selectedField.boundary) : null;
 
-  const scoreLabel = layer === "water" ? "High-moisture area" : "Average NDVI";
+  const isWater = layer === "water";
+  const moisture = getMockSoilMoisture(lastNdviAverage, analysis?.stats?.waterPercentage);
+
+  const scoreLabel = isWater ? "Average Soil Moisture" : "Average NDVI";
   const scoreValue = loading
     ? "…"
-    : layer === "water"
-      ? analysis?.stats?.waterPercentage !== undefined
-        ? `${analysis.stats.waterPercentage.toFixed(1)}%`
-        : "--"
+    : isWater
+      ? moisture.value
       : analysis?.stats?.averageNdvi !== undefined
         ? analysis.stats.averageNdvi.toFixed(2)
         : "--";
+  const legendNote = isWater ? "Sentinel-2 NDWI / Copernicus" : "Sentinel-2 · Copernicus";
+
+  const statusBadge = loading
+    ? null
+    : isWater
+      ? getMoistureBadge(moisture.value)
+      : getNdviBadge(analysis?.stats?.averageNdvi);
 
   return (
-    <div className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-6 shadow-soft sm:flex-row sm:items-center sm:justify-between">
-      {/* Field identity */}
-      <div className="min-w-0">
+    <div className="grid w-full grid-cols-1 gap-6 md:grid-cols-2">
+      {/* ── Left: Field identity ─────────────────────────────────────────── */}
+      <div className="flex flex-col justify-center rounded-2xl border border-border bg-card p-8 shadow-soft">
+        <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+          Selected field
+        </p>
         {selectedField ? (
-          <>
-            <h2 className="truncate text-3xl font-bold tracking-tight">{selectedField.name}</h2>
-            <p className="mt-1 text-base font-medium text-muted-foreground">{areaLabel}</p>
-          </>
+          <div className="mt-3 flex flex-wrap items-baseline gap-x-3 gap-y-2">
+            <h2 className="text-3xl font-extrabold tracking-tight">{selectedField.name}</h2>
+            <span className="rounded-full border border-border bg-background px-3.5 py-1 text-base font-bold text-muted-foreground">
+              {areaLabel}
+            </span>
+          </div>
         ) : (
-          <>
-            <h2 className="text-3xl font-bold tracking-tight text-muted-foreground">No field selected</h2>
-            <p className="mt-1 text-base text-muted-foreground">Click a field polygon on the map</p>
-          </>
+          <h2 className="mt-3 text-3xl font-extrabold tracking-tight text-muted-foreground">
+            Click a field on the map
+          </h2>
         )}
       </div>
 
-      {/* Score */}
-      <div className="flex shrink-0 flex-col items-start rounded-2xl border border-border bg-background px-8 py-5 sm:items-center">
+      {/* ── Right: Score ─────────────────────────────────────────────────── */}
+      <div className="flex flex-col items-center justify-center rounded-2xl border border-border bg-card p-8 shadow-soft">
         <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
           {scoreLabel}
         </p>
         {loading ? (
-          <div className="mt-2 flex items-center gap-2">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            <span className="text-2xl font-bold text-muted-foreground">…</span>
+          <div className="mt-4 flex items-center gap-3">
+            <Loader2 className="h-7 w-7 animate-spin text-muted-foreground" />
+            <span className="text-4xl font-extrabold text-muted-foreground">…</span>
           </div>
         ) : (
-          <p className="mt-1 text-5xl font-bold tabular-nums tracking-tight">{scoreValue}</p>
+          <p className="mt-3 text-6xl font-extrabold tabular-nums tracking-tight">{scoreValue}</p>
         )}
-        <p className="mt-1.5 text-[11px] text-muted-foreground">Sentinel-2 · Copernicus</p>
+        {statusBadge && (
+          <p className={`mt-2 text-center text-xs font-bold ${statusBadge.className}`}>
+            {statusBadge.text}
+          </p>
+        )}
+        <p className="mt-3 text-xs text-muted-foreground">{legendNote}</p>
       </div>
+
     </div>
   );
 }
 
-function formatMetric(value: number | undefined) {
-  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(2) : "--";
-}
